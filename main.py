@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""
+Lesson Transcriber - Transcribes audio lessons using Whisper and generates summaries with Ollama
+"""
+
+import sys
+import logging
+import os
+import requests
+from pathlib import Path
+
+try:
+    import whisper
+except ImportError:
+    print("Error: whisper not installed. Run 'pip install openai-whisper'")
+    sys.exit(1)
+
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class LessonTranscriber:
+    def __init__(self, whisper_model="base", ollama_url="http://localhost:11434"):
+        """
+        Initialize the transcriber with Whisper model and Ollama endpoint
+        """
+        self.ollama_url = ollama_url
+        logger.info(f"Loading Whisper model: {whisper_model}")
+        try:
+            self.whisper_model = whisper.load_model(whisper_model)
+        except Exception as e:
+            logger.error(f"Failed to load Whisper model: {e}")
+            raise
+
+        logger.info("Lesson Transcriber initialized successfully")
+
+    def validate_audio_file(self, audio_path):
+        """
+        Validate if the audio file exists and has a supported format
+        """
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+    
+        supported_formats = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
+        file_extension = Path(audio_path).suffix.lower()
+    
+        if file_extension not in supported_formats:
+            raise ValueError(f"Unsupported audio format: {file_extension}. Supported: {supported_formats}")
+    
+        # Check if ffmpeg is available for audio decoding
+        try:
+            import subprocess
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            raise RuntimeError(
+                "FFmpeg not found. Whisper requires FFmpeg to process audio files.\n"
+                "Install FFmpeg from: https://ffmpeg.org/download.html\n"
+                "Or with: chocolatey install ffmpeg"
+            )
+    
+        return True
+
+    def transcribe_audio(self, audio_path):
+        """
+        Transcribe the audio file using Whisper
+        """
+        self.validate_audio_file(audio_path)
+        logger.info(f"Transcribing audio file: {audio_path}")
+
+        try:
+            result = self.whisper_model.transcribe(audio_path)
+            transcript = result["text"].strip()
+            logger.info(f"Transcription completed successfully ({len(transcript)} characters)")
+            return transcript
+        except Exception as e:
+            logger.error(f"Transcription failed: {e}")
+            raise
+
+    def generate_summary(self, transcript, max_summary_length=1000):
+        """
+        Generate a summary of the transcript using Ollama
+        """
+        logger.info("Generating summary with Ollama")
+
+        # Prepare the prompt for summarization
+        prompt = f"""Please provide a concise summary of the following lesson transcript in a clear, structured format with key points. Keep the summary under {max_summary_length} words.
+
+Transcript:
+{transcript}
+
+Summary:"""
+
+        try:
+            response = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json={
+                    "model": "gemma3:4b-it-qat",  # Default model, can be configured
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=300  # 5 minute timeout
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                summary = result.get("response", "").strip()
+                logger.info(f"Summary generated successfully ({len(summary)} characters)")
+                return summary
+            else:
+                logger.error(f"Ollama API error: {response.status_code} - {response.text}")
+                raise Exception(f"Ollama API returned {response.status_code}")
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to connect to Ollama: {e}")
+            raise Exception("Cannot connect to Ollama. Make sure it's running on localhost:11434")
+
+    def process_lesson(self, audio_path, output_dir=None):
+        """
+        Process a lesson audio file: transcribe and summarize
+        """
+        try:
+            # Create output directory if specified
+            if output_dir:
+                Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+            # Transcribe the audio
+            transcript = self.transcribe_audio(audio_path)
+
+            # Generate summary
+            summary = self.generate_summary(transcript)
+
+            # Prepare output
+            base_name = Path(audio_path).stem
+            result = {
+                "audio_file": audio_path,
+                "transcript": transcript,
+                "summary": summary
+            }
+
+            # Save to files if output directory specified
+            if output_dir:
+                transcript_file = Path(output_dir) / f"{base_name}_transcript.txt"
+                summary_file = Path(output_dir) / f"{base_name}_summary.txt"
+
+                transcript_file.write_text(transcript, encoding='utf-8')
+                summary_file.write_text(summary, encoding='utf-8')
+
+                result["transcript_file"] = str(transcript_file)
+                result["summary_file"] = str(summary_file)
+
+                logger.info(f"Results saved to {output_dir}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to process lesson: {e}")
+            raise
+
+
+def get_audio_paths(source):
+    """
+    Get list of audio file paths from source (file or directory)
+    """
+    if os.path.isfile(source):
+        return [os.path.abspath(source)]
+    elif os.path.isdir(source):
+        supported_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
+        return [str(f.resolve()) for f in Path(source).glob("*") if f.is_file() and f.suffix.lower() in supported_extensions]
+    else:
+        raise ValueError(f"Invalid audio source: {source}. Must be a file or directory")
+
+
+def main():
+    if len(sys.argv) > 2:
+        print("""
+Usage: python main.py [audio_source]
+
+Transcribe and summarize audio lessons.
+
+Arguments:
+  audio_source    Path to audio file or directory (defaults to 'audio/')
+
+Supported formats: mp3, wav, m4a, flac, ogg
+Make sure Ollama is running locally for summarization.
+        """)
+        sys.exit(1)
+
+    audio_source = sys.argv[1] if len(sys.argv) == 2 else "audio"
+
+    # Get list of audio files to process
+    try:
+        audio_paths = get_audio_paths(audio_source)
+        if not audio_paths:
+            print(f"No audio files found in {audio_source}")
+            sys.exit(1)
+    except Exception as e:
+        print(f"Error accessing audio source: {e}")
+        sys.exit(1)
+
+    # Initialize transcriber
+    transcriber = LessonTranscriber()
+
+    for audio_path in audio_paths:
+        try:
+            # Process the lesson
+            result = transcriber.process_lesson(audio_path, output_dir="output")
+
+            print("\n" + "="*60)
+            print(f"LESSON TRANSCRIPTION SUMMARY ({Path(audio_path).name})")
+            print("="*60)
+            print(f"Audio File: {result['audio_file']}")
+            if 'transcript_file' in result:
+                print(f"Transcript: {result['transcript_file']}")
+                print(f"Summary: {result['summary_file']}")
+            print("\n" + "="*60)
+            print("TRANSCRIPT:")
+            print("="*60)
+            print(result['transcript'])
+            print("\n" + "="*60)
+            print("SUMMARY:")
+            print("="*60)
+            print(result['summary'])
+
+        except Exception as e:
+            print(f"Error processing {audio_path}: {e}")
+            continue
+
+
+if __name__ == "__main__":
+    main()
