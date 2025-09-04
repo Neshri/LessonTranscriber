@@ -133,10 +133,14 @@ class LessonTranscriber:
                 result = self.whisper_model.transcribe(audio_path)
                 transcript = result["text"].strip()
             else:
-                # Using Hugging Face pipeline
-                result = self.pipe(audio_path, return_timestamps=False)
+                # Using Hugging Face pipeline - enable timestamps for long audio
+                result = self.pipe(audio_path, return_timestamps=True)
                 if isinstance(result, dict) and "text" in result:
                     transcript = result["text"].strip()
+                elif isinstance(result, dict) and "chunks" in result:
+                    # Handle chunked transcription with timestamps
+                    transcript = " ".join([chunk.get("text", "").strip() for chunk in result["chunks"] if chunk.get("text")])
+                    transcript = transcript.strip()
                 else:
                     transcript = str(result).strip()
 
