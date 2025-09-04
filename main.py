@@ -127,8 +127,11 @@ class LessonTranscriber:
             raise Exception(f"Failed to load Whisper model. Error: {e}")
 
     def _estimate_token_count(self, text):
-        """Roughly estimate token count (1 token ≈ 4 characters)"""
-        return len(text) // 4
+        """Better estimate token count using word-based estimation"""
+        # Split by whitespace and count words as proxy for tokens
+        words = text.split()
+        # Use word count as rough token estimate (more accurate for speech transcripts)
+        return len(words)
 
     def _estimate_text_size_mb(self, text):
         """Estimate text size in MB"""
@@ -241,15 +244,18 @@ class LessonTranscriber:
         """Summarize a single transcript chunk"""
         logger.info(f"Summarizing chunk ({len(transcript_chunk)} characters)")
 
+        # Analyze transcript size - if very small, use minimal context
+        chunk_words = len(transcript_chunk.split())
+        context_limit = min(4096, chunk_words + 500)  # Context should fit content + overhead
+
+        logger.info(f"Chunk has ~{chunk_words} words, using context_limit={context_limit}")
+
         prompt = self.summarization_prompt_template.format(
             max_length=self.max_summary_length // 4,  # Divide max_length among chunks
             transcript=transcript_chunk
         )
 
         try:
-            # Limit context to prevent memory allocation issues with large models
-            context_limit = 4096
-
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json={
@@ -265,6 +271,8 @@ class LessonTranscriber:
                 },
                 timeout=300  # 5 minute timeout
             )
+
+            logger.info(f"Summarization API call completed with status: {response.status_code}")
 
             if response.status_code == 200:
                 result = response.json()
@@ -339,7 +347,10 @@ Individual summaries:
         logger.info(f"Transcript size: {transcript_mb:.1f}MB, estimated {estimated_tokens} tokens, needs ~{context_required} context tokens")
 
         # If transcript fits in our context window, summarize normally
-        if estimated_tokens + 1000 < self.max_context_tokens:  # +1000 for prompt overhead
+        safe_context = self.max_context_tokens - 1000  # Leave more room for prompt + generation
+        logger.info(f"Checking if transcript fits: {estimated_tokens} < {safe_context}")
+
+        if estimated_tokens < safe_context:
             return self._summarize_chunk(transcript)
 
         # For long transcripts, use chunking strategy
