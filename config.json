@@ -1,0 +1,7 @@
+{
+  "whisper_model": "KBLab/kb-whisper-large",
+  "ollama_model": "gemma3:27b-it-qat", 
+  "ollama_url": "http://localhost:11434",
+  "summarization_prompt_template": "Please provide a concise summary of the following lesson transcript in a clear, structured format with key points. Keep the summary under {max_length} words.\n\nTranscript:\n{transcript}\n\nSummary:",
+  "max_summary_length": 1000
+}

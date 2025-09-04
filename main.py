@@ -7,6 +7,7 @@ import sys
 import logging
 import os
 import requests
+import json
 from pathlib import Path
 
 try:
@@ -25,14 +26,20 @@ logger = logging.getLogger(__name__)
 
 
 class LessonTranscriber:
-    def __init__(self, whisper_model="base", ollama_url="http://localhost:11434"):
+    def __init__(self, config):
         """
-        Initialize the transcriber with Whisper model and Ollama endpoint
+        Initialize the transcriber with config dictionary
         """
-        self.ollama_url = ollama_url
-        logger.info(f"Loading Whisper model: {whisper_model}")
+        self.config = config
+        self.whisper_model_name = config['whisper_model']
+        self.ollama_url = config['ollama_url']
+        self.ollama_model = config['ollama_model']
+        self.max_summary_length = config.get('max_summary_length', 1000)
+        self.summarization_prompt_template = config['summarization_prompt_template']
+
+        logger.info(f"Loading Whisper model: {self.whisper_model_name}")
         try:
-            self.whisper_model = whisper.load_model(whisper_model)
+            self.whisper_model = whisper.load_model(self.whisper_model_name)
         except Exception as e:
             logger.error(f"Failed to load Whisper model: {e}")
             raise
@@ -81,25 +88,20 @@ class LessonTranscriber:
             logger.error(f"Transcription failed: {e}")
             raise
 
-    def generate_summary(self, transcript, max_summary_length=1000):
+    def generate_summary(self, transcript):
         """
         Generate a summary of the transcript using Ollama
         """
         logger.info("Generating summary with Ollama")
 
         # Prepare the prompt for summarization
-        prompt = f"""Please provide a concise summary of the following lesson transcript in a clear, structured format with key points. Keep the summary under {max_summary_length} words.
-
-Transcript:
-{transcript}
-
-Summary:"""
+        prompt = self.summarization_prompt_template.format(max_length=self.max_summary_length, transcript=transcript)
 
         try:
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json={
-                    "model": "gemma3:4b-it-qat",  # Default model, can be configured
+                    "model": self.ollama_model,
                     "prompt": prompt,
                     "stream": False
                 },
@@ -202,8 +204,21 @@ Make sure Ollama is running locally for summarization.
         print(f"Error accessing audio source: {e}")
         sys.exit(1)
 
+    # Load configuration
+    try:
+        with open('config.json', 'r') as f:
+            config = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading config.json: {e}")
+        print("Please ensure config.json exists and is valid.")
+        sys.exit(1)
+
     # Initialize transcriber
-    transcriber = LessonTranscriber()
+    try:
+        transcriber = LessonTranscriber(config)
+    except Exception as e:
+        print(f"Failed to initialize transcriber: {e}")
+        sys.exit(1)
 
     for audio_path in audio_paths:
         try:
