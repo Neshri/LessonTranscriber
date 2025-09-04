@@ -45,6 +45,9 @@ class LessonTranscriber:
         self.max_summary_length = config.get('max_summary_length', 1000)
         self.summarization_prompt_template = config['summarization_prompt_template']
         self.gpu_device = config.get('gpu_device', 'auto')
+        self.chunk_size_mb = config.get('chunk_size_mb', 10)  # MB of text per chunk
+        self.max_context_tokens = config.get('max_context_tokens', 3200)
+        self.overlap_tokens = config.get('overlap_tokens', 200)  # Overlap between chunks
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
@@ -123,6 +126,61 @@ class LessonTranscriber:
             logger.error(f"Failed to load Hugging Face model {self.whisper_model_name}: {e}")
             raise Exception(f"Failed to load Whisper model. Error: {e}")
 
+    def _estimate_token_count(self, text):
+        """Roughly estimate token count (1 token ≈ 4 characters)"""
+        return len(text) // 4
+
+    def _estimate_text_size_mb(self, text):
+        """Estimate text size in MB"""
+        return len(text.encode('utf-8')) / (1024 * 1024)
+
+    def _split_text_into_chunks(self, text, max_tokens=3000, overlap_tokens=200):
+        """Split text into overlapping chunks that fit within token limit"""
+        sentences = text.split('. ')
+        chunks = []
+        current_chunk = ""
+        current_tokens = 0
+
+        for i, sentence in enumerate(sentences):
+            sentence_tokens = self._estimate_token_count(sentence)
+
+            if sentence_tokens > max_tokens:
+                # Handle very long sentences by breaking them
+                words = sentence.split()
+                temp_chunk = ""
+                for word in words:
+                    if current_tokens + len(word) // 4 > max_tokens:
+                        if temp_chunk:
+                            chunks.append(temp_chunk)
+                        temp_chunk = current_chunk + word if current_chunk else word
+                        current_tokens = len((current_chunk + word).split()) // 4
+                        current_chunk = ""
+                    else:
+                        temp_chunk += " " + word
+                        current_tokens += len(word) // 4
+
+                if temp_chunk:
+                    chunks.append(temp_chunk)
+                continue
+
+            if current_tokens + sentence_tokens >= max_tokens + 20:  # Reserve margin
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    # Add overlap from end of previous chunk
+                    overlap_start = max(0, len(current_chunk) - overlap_tokens * 4)
+                    current_chunk = current_chunk[overlap_start:] + sentence + ". "
+                else:
+                    current_chunk = sentence + ". "
+                current_tokens = self._estimate_token_count(current_chunk)
+            else:
+                current_chunk += sentence + ". "
+                current_tokens = self._estimate_token_count(current_chunk)
+
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+
+        return chunks
+
     def validate_audio_file(self, audio_path):
         """
         Validate if the audio file exists and has a supported format
@@ -179,33 +237,18 @@ class LessonTranscriber:
             logger.error(f"Transcription failed: {e}")
             raise
 
-    def generate_summary(self, transcript):
-        """
-        Generate a summary of the transcript using Ollama
-        """
-        logger.info("Generating summary with Ollama")
+    def _summarize_chunk(self, transcript_chunk):
+        """Summarize a single transcript chunk"""
+        logger.info(f"Summarizing chunk ({len(transcript_chunk)} characters)")
 
-        # Prepare the prompt for summarization
-        prompt = self.summarization_prompt_template.format(max_length=self.max_summary_length, transcript=transcript)
+        prompt = self.summarization_prompt_template.format(
+            max_length=self.max_summary_length // 4,  # Divide max_length among chunks
+            transcript=transcript_chunk
+        )
 
         try:
             # Limit context to prevent memory allocation issues with large models
-            context_limit = 4096  # Reduced from 10K to 4K for better compatibility
-
-            # Debug: Log the exact request being sent
-            request_data = {
-                "model": self.ollama_model,
-                "prompt": prompt[:200] + "..." if len(prompt) > 200 else prompt,  # Truncate for logging
-                "stream": False,
-                "options": {
-                    "num_ctx": context_limit,
-                    "temperature": 0.1,
-                    "top_p": 0.9,
-                    "repeat_penalty": 1.1
-                }
-            }
-            logger.info(f"DEBUG: Sending request to Ollama API with context_limit={context_limit}")
-            logger.info(f"DEBUG: Request data: {json.dumps(request_data, indent=2)}")
+            context_limit = 4096
 
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
@@ -223,15 +266,10 @@ class LessonTranscriber:
                 timeout=300  # 5 minute timeout
             )
 
-            # Debug: Log response status and content
-            logger.info(f"DEBUG: Ollama API response status: {response.status_code}")
-            if response.status_code != 200:
-                logger.error(f"DEBUG: Ollama response body: {response.text}")
-
             if response.status_code == 200:
                 result = response.json()
                 summary = result.get("response", "").strip()
-                logger.info(f"Summary generated successfully ({len(summary)} characters)")
+                logger.info(f"Chunk summary completed ({len(summary)} characters)")
                 return summary
             else:
                 logger.error(f"Ollama API error: {response.status_code} - {response.text}")
@@ -240,6 +278,101 @@ class LessonTranscriber:
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to connect to Ollama: {e}")
             raise Exception("Cannot connect to Ollama. Make sure it's running on localhost:11434")
+
+    def _combine_chunk_summaries(self, chunk_summaries):
+        """Combine multiple chunk summaries into a final comprehensive summary"""
+        if len(chunk_summaries) <= 1:
+            return chunk_summaries[0] if chunk_summaries else ""
+
+        logger.info(f"Combining {len(chunk_summaries)} chunk summaries")
+
+        combined_summary_prompt = f"""You have summaries from {len(chunk_summaries)} parts of a longer lesson transcript.
+Please create a single, cohesive summary that combines all the key points and maintains a logical flow.
+Keep the summary under {self.max_summary_length} words.
+
+Individual summaries:
+""" + "\n\n".join(f"Part {i+1}: {summary}" for i, summary in enumerate(chunk_summaries)) + "\n\nFinal Combined Summary:"
+
+        try:
+            response = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json={
+                    "model": self.ollama_model,
+                    "prompt": combined_summary_prompt,
+                    "stream": False,
+                    "options": {
+                        "num_ctx": self.max_context_tokens,
+                        "temperature": 0.05,  # Even more deterministic for combining
+                        "top_p": 0.8,
+                        "repeat_penalty": 1.2
+                    }
+                },
+                timeout=600  # 10 minute timeout for final summary
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                final_summary = result.get("response", "").strip()
+                logger.info(f"Final combined summary completed ({len(final_summary)} characters)")
+                return final_summary
+            else:
+                logger.error(f"Combined summary failed: {response.status_code} - {response.text}")
+                # Fallback: return concatenated individual summaries
+                return "\n\n".join(chunk_summaries)
+
+        except Exception as e:
+            logger.error(f"Failed to combine summaries: {e}")
+            # Fallback: return concatenated individual summaries
+            return "\n\n".join(chunk_summaries)
+
+    def generate_summary(self, transcript):
+        """
+        Generate a summary of the transcript using Ollama
+        """
+        logger.info("Generating summary with Ollama")
+
+        # Check if transcript size requires chunking (estimate MB based on character count)
+        transcript_mb = self._estimate_text_size_mb(transcript)
+        estimated_tokens = self._estimate_token_count(transcript)
+        context_required = estimated_tokens // 4  # Rough calculation of necessary context
+
+        logger.info(f"Transcript size: {transcript_mb:.1f}MB, estimated {estimated_tokens} tokens, needs ~{context_required} context tokens")
+
+        # If transcript fits in our context window, summarize normally
+        if estimated_tokens + 1000 < self.max_context_tokens:  # +1000 for prompt overhead
+            return self._summarize_chunk(transcript)
+
+        # For long transcripts, use chunking strategy
+        logger.info("Transcript too long, using chunking strategy")
+
+        # Split into chunks
+        chunks = self._split_text_into_chunks(
+            transcript,
+            max_tokens=self.max_context_tokens - 1000,  # Leave room for prompt
+            overlap_tokens=self.overlap_tokens
+        )
+
+        logger.info(f"Split transcript into {len(chunks)} chunks")
+
+        if not chunks:
+            return "Unable to process transcript - no valid content found"
+
+        # Summarize each chunk
+        chunk_summaries = []
+        for i, chunk in enumerate(chunks):
+            try:
+                summary = self._summarize_chunk(chunk)
+                chunk_summaries.append(summary)
+                logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully")
+            except Exception as e:
+                logger.error(f"Failed to summarize chunk {i+1}: {e}")
+                chunk_summaries.append(f"[Error summarizing part {i+1}: {str(e)}]")
+
+        # Combine chunk summaries into final summary
+        if len(chunk_summaries) == 1:
+            return chunk_summaries[0]
+        else:
+            return self._combine_chunk_summaries(chunk_summaries)
 
     def process_lesson(self, audio_path, output_dir=None):
         """

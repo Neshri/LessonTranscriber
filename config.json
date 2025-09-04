@@ -4,5 +4,8 @@
   "ollama_url": "http://127.0.0.1:11434",
   "summarization_prompt_template": "Please provide a concise summary of the following lesson transcript in a clear, structured format with key points. Keep the summary under {max_length} words.\n\nTranscript:\n{transcript}\n\nSummary:",
   "max_summary_length": 1000,
-  "gpu_device": "auto"
+  "gpu_device": "cuda:0",
+  "chunk_size_mb": 10,
+  "max_context_tokens": 3200,
+  "overlap_tokens": 200
 }
