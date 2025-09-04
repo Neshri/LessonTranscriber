@@ -189,12 +189,21 @@ class LessonTranscriber:
         prompt = self.summarization_prompt_template.format(max_length=self.max_summary_length, transcript=transcript)
 
         try:
+            # Limit context to prevent memory allocation issues with large models
+            context_limit = 10000  # Plenty for summary generation, but not 1M tokens
+
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json={
                     "model": self.ollama_model,
                     "prompt": prompt,
-                    "stream": False
+                    "stream": False,
+                    "options": {
+                        "num_ctx": context_limit,  # Limit context window to 4K tokens
+                        "temperature": 0.1,         # Lower temperature for more consistent summaries
+                        "top_p": 0.9,               # Slightly narrower sampling
+                        "repeat_penalty": 1.1       # Reduce repetition
+                    }
                 },
                 timeout=300  # 5 minute timeout
             )
