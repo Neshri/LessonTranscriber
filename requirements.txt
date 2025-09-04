@@ -1,5 +1,6 @@
 openai-whisper>=20240930
 torch>=2.0.0
+transformers>=4.35.0
 requests>=2.25.0
 numpy>=1.21.0
 ffmpeg-python>=0.2.0

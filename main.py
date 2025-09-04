@@ -12,9 +12,17 @@ from pathlib import Path
 
 try:
     import whisper
+    WHISPER_AVAILABLE = True
 except ImportError:
-    print("Error: whisper not installed. Run 'pip install openai-whisper'")
-    sys.exit(1)
+    WHISPER_AVAILABLE = False
+
+try:
+    from transformers import pipeline
+    import torch
+    HUGGINGFACE_AVAILABLE = True
+except ImportError:
+    HUGGINGFACE_AVAILABLE = False
+    torch = None
 
 
 # Configure logging
@@ -38,13 +46,53 @@ class LessonTranscriber:
         self.summarization_prompt_template = config['summarization_prompt_template']
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
-        try:
-            self.whisper_model = whisper.load_model(self.whisper_model_name)
-        except Exception as e:
-            logger.error(f"Failed to load Whisper model: {e}")
-            raise
+
+        # Try to load as standard Whisper model first
+        if self._is_standard_whisper_model(self.whisper_model_name) and WHISPER_AVAILABLE:
+            try:
+                self.pipe = None  # Using whisper library, not pipeline
+                self.whisper_model = whisper.load_model(self.whisper_model_name)
+                self.use_standard_whisper = True
+                logger.info("Using standard Whisper model")
+            except Exception as e:
+                logger.warning(f"Failed to load standard Whisper model {self.whisper_model_name}: {e}")
+                if HUGGINGFACE_AVAILABLE:
+                    logger.info("Falling back to Hugging Face pipeline")
+                    self._load_huggingface_model()
+                else:
+                    raise Exception(f"No valid transcription models available. Please install transformers or use a standard Whisper model.")
+        elif HUGGINGFACE_AVAILABLE:
+            self._load_huggingface_model()
+        else:
+            raise Exception("Neither standard Whisper nor Hugging Face transformers available. Please install required packages.")
 
         logger.info("Lesson Transcriber initialized successfully")
+
+    def _is_standard_whisper_model(self, model_name):
+        """Check if the model name is a standard Whisper model"""
+        standard_models = ['tiny', 'base', 'small', 'medium', 'large', 'large-v1', 'large-v2', 'large-v3', 'turbo', 'large-v3-turbo']
+        # Check for language variants too
+        for model in standard_models:
+            if model_name.startswith(model):
+                return True
+        return False
+
+    def _load_huggingface_model(self):
+        """Load Whisper model from Hugging Face"""
+        try:
+            logger.info(f"Loading Hugging Face model: {self.whisper_model_name}")
+            self.pipe = pipeline(
+                "automatic-speech-recognition",
+                model=self.whisper_model_name,
+                device=0 if torch.cuda.is_available() else -1,  # Use GPU if available
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+            )
+            self.whisper_model = None  # Not using whisper library
+            self.use_standard_whisper = False
+            logger.info("Successfully loaded Hugging Face Whisper model")
+        except Exception as e:
+            logger.error(f"Failed to load Hugging Face model {self.whisper_model_name}: {e}")
+            raise Exception(f"Failed to load Whisper model. Error: {e}")
 
     def validate_audio_file(self, audio_path):
         """
@@ -80,8 +128,18 @@ class LessonTranscriber:
         logger.info(f"Transcribing audio file: {audio_path}")
 
         try:
-            result = self.whisper_model.transcribe(audio_path)
-            transcript = result["text"].strip()
+            if self.use_standard_whisper:
+                # Using standard openai-whisper
+                result = self.whisper_model.transcribe(audio_path)
+                transcript = result["text"].strip()
+            else:
+                # Using Hugging Face pipeline
+                result = self.pipe(audio_path, return_timestamps=False)
+                if isinstance(result, dict) and "text" in result:
+                    transcript = result["text"].strip()
+                else:
+                    transcript = str(result).strip()
+
             logger.info(f"Transcription completed successfully ({len(transcript)} characters)")
             return transcript
         except Exception as e:
