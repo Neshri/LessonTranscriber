@@ -190,7 +190,22 @@ class LessonTranscriber:
 
         try:
             # Limit context to prevent memory allocation issues with large models
-            context_limit = 10000  # Plenty for summary generation, but not 1M tokens
+            context_limit = 4096  # Reduced from 10K to 4K for better compatibility
+
+            # Debug: Log the exact request being sent
+            request_data = {
+                "model": self.ollama_model,
+                "prompt": prompt[:200] + "..." if len(prompt) > 200 else prompt,  # Truncate for logging
+                "stream": False,
+                "options": {
+                    "num_ctx": context_limit,
+                    "temperature": 0.1,
+                    "top_p": 0.9,
+                    "repeat_penalty": 1.1
+                }
+            }
+            logger.info(f"DEBUG: Sending request to Ollama API with context_limit={context_limit}")
+            logger.info(f"DEBUG: Request data: {json.dumps(request_data, indent=2)}")
 
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
@@ -199,14 +214,19 @@ class LessonTranscriber:
                     "prompt": prompt,
                     "stream": False,
                     "options": {
-                        "num_ctx": context_limit,  # Limit context window to 4K tokens
-                        "temperature": 0.1,         # Lower temperature for more consistent summaries
-                        "top_p": 0.9,               # Slightly narrower sampling
-                        "repeat_penalty": 1.1       # Reduce repetition
+                        "num_ctx": context_limit,
+                        "temperature": 0.1,
+                        "top_p": 0.9,
+                        "repeat_penalty": 1.1
                     }
                 },
                 timeout=300  # 5 minute timeout
             )
+
+            # Debug: Log response status and content
+            logger.info(f"DEBUG: Ollama API response status: {response.status_code}")
+            if response.status_code != 200:
+                logger.error(f"DEBUG: Ollama response body: {response.text}")
 
             if response.status_code == 200:
                 result = response.json()
