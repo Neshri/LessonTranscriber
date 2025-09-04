@@ -44,6 +44,7 @@ class LessonTranscriber:
         self.ollama_model = config['ollama_model']
         self.max_summary_length = config.get('max_summary_length', 1000)
         self.summarization_prompt_template = config['summarization_prompt_template']
+        self.gpu_device = config.get('gpu_device', 'auto')
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
@@ -81,11 +82,39 @@ class LessonTranscriber:
         """Load Whisper model from Hugging Face"""
         try:
             logger.info(f"Loading Hugging Face model: {self.whisper_model_name}")
+
+            # Determine device based on config
+            if self.gpu_device == "auto":
+                device = 0 if torch.cuda.is_available() else -1
+                torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            elif self.gpu_device == "cpu":
+                device = -1
+                torch_dtype = torch.float32
+            elif self.gpu_device.startswith("cuda:"):
+                device_spec = self.gpu_device.split(":")[1]
+                try:
+                    device = int(device_spec)
+                    torch_dtype = torch.float16
+                except ValueError:
+                    logger.warning(f"Invalid CUDA device specification: {self.gpu_device}. Using auto-detection.")
+                    device = 0 if torch.cuda.is_available() else -1
+                    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            else:
+                logger.warning(f"Unknown gpu_device setting: {self.gpu_device}. Using auto-detection.")
+                device = 0 if torch.cuda.is_available() else -1
+                torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+            # Log device information for debugging
+            if device >= 0:
+                logger.info(f"Using GPU device {device} with {torch_dtype}")
+            else:
+                logger.info("Using CPU for processing")
+
             self.pipe = pipeline(
                 "automatic-speech-recognition",
                 model=self.whisper_model_name,
-                device=0 if torch.cuda.is_available() else -1,  # Use GPU if available
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                device=device,
+                torch_dtype=torch_dtype
             )
             self.whisper_model = None  # Not using whisper library
             self.use_standard_whisper = False
