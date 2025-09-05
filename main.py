@@ -217,6 +217,15 @@ class LessonTranscriber:
         self.validate_audio_file(audio_path)
         logger.info(f"Transcribing audio file: {audio_path}")
 
+        # Load model if not loaded
+        if self.use_standard_whisper:
+            if self.whisper_model is None:
+                logger.info(f"Loading Whisper model: {self.whisper_model_name}")
+                self.whisper_model = whisper.load_model(self.whisper_model_name)
+        else:
+            if self.pipe is None:
+                self._load_huggingface_model()
+
         try:
             if self.use_standard_whisper:
                 # Using standard openai-whisper
@@ -396,6 +405,17 @@ Individual summaries:
 
             # Transcribe the audio
             transcript = self.transcribe_audio(audio_path)
+
+            # Unload Whisper to free memory before summarization
+            if self.use_standard_whisper and self.whisper_model is not None:
+                del self.whisper_model
+                self.whisper_model = None
+            elif not self.use_standard_whisper and self.pipe is not None:
+                del self.pipe
+                self.pipe = None
+            if torch and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.info("Whisper model unloaded and GPU cache cleared")
 
             # Generate summary
             summary = self.generate_summary(transcript)
