@@ -8,6 +8,9 @@ import logging
 import os
 import requests
 import json
+import time
+import hashlib
+import argparse
 from pathlib import Path
 
 try:
@@ -460,30 +463,85 @@ def get_audio_paths(source):
     else:
         raise ValueError(f"Invalid audio source: {source}. Must be a file or directory")
 
+def load_processed_files():
+    """
+    Load the set of processed file hashes from JSON file
+    """
+    tracking_file = Path("processed_files.json")
+    if tracking_file.exists():
+        try:
+            with open(tracking_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            logger.warning("Failed to load processed files tracking, starting fresh")
+            return {}
+    return {}
+
+def save_processed_files(processed_files):
+    """
+    Save the set of processed file hashes to JSON file
+    """
+    tracking_file = Path("processed_files.json")
+    try:
+        with open(tracking_file, 'w') as f:
+            json.dump(processed_files, f, indent=2)
+    except IOError as e:
+        logger.error(f"Failed to save processed files tracking: {e}")
+
+def get_file_hash(file_path):
+    """
+    Generate SHA256 hash of file contents to detect if file has changed
+    """
+    try:
+        hash_sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
+    except (OSError, IOError):
+        return None
+
+def is_file_processed(file_path, processed_files):
+    """
+    Check if file has been processed by comparing hashes
+    """
+    file_hash = get_file_hash(file_path)
+    if file_hash is None:
+        return False  # Can't read file, consider unprocessed
+    expected_hash = processed_files.get(str(file_path))
+    return expected_hash == file_hash
+
 
 def main():
-    if len(sys.argv) > 2:
-        print("""
-Usage: python main.py [audio_source]
-
-Transcribe and summarize audio lessons.
-
-Arguments:
-  audio_source    Path to audio file or directory (defaults to 'audio/')
-
+    parser = argparse.ArgumentParser(
+        description="Transcribe and summarize audio lessons.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
 Supported formats: mp3, wav, m4a, flac, ogg
 Make sure Ollama is running locally for summarization.
-        """)
-        sys.exit(1)
 
-    audio_source = sys.argv[1] if len(sys.argv) == 2 else "audio"
+In monitor mode, the program will continuously check the audio directory
+for new files every 5 seconds and process them automatically.
+Use Ctrl+C to stop monitoring.
+        """
+    )
+    parser.add_argument('audio_source', nargs='?', default='audio',
+                        help='Path to audio file or directory (default: audio/)')
+    parser.add_argument('--monitor', action='store_true',
+                        help='Enable continuous monitoring mode')
 
-    # Get list of audio files to process
+    args = parser.parse_args()
+
+    audio_source = args.audio_source
+    monitor_mode = args.monitor
+
+    # Get initial list of audio files
     try:
-        audio_paths = get_audio_paths(audio_source)
-        if not audio_paths:
-            print(f"No audio files found in {audio_source}")
-            sys.exit(1)
+        if not monitor_mode:
+            audio_paths = get_audio_paths(audio_source)
+            if not audio_paths:
+                print(f"No audio files found in {audio_source}")
+                sys.exit(1)
     except Exception as e:
         print(f"Error accessing audio source: {e}")
         sys.exit(1)
@@ -504,30 +562,93 @@ Make sure Ollama is running locally for summarization.
         print(f"Failed to initialize transcriber: {e}")
         sys.exit(1)
 
-    for audio_path in audio_paths:
+    if monitor_mode:
+        logger.info("Starting monitoring mode. Checking for new files every 5 seconds...")
+        processed_files = load_processed_files()
+
         try:
-            # Process the lesson
-            result = transcriber.process_lesson(audio_path, output_dir="output")
+            while True:
+                # Get current audio files
+                try:
+                    current_audio_paths = get_audio_paths(audio_source)
+                    if not current_audio_paths:
+                        logger.debug(f"No audio files found in {audio_source}")
+                except Exception as e:
+                    logger.error(f"Error scanning audio directory: {e}")
+                    time.sleep(5)
+                    continue
 
-            print("\n" + "="*60)
-            print(f"LESSON TRANSCRIPTION SUMMARY ({Path(audio_path).name})")
-            print("="*60)
-            print(f"Audio File: {result['audio_file']}")
-            if 'transcript_file' in result:
-                print(f"Transcript: {result['transcript_file']}")
-                print(f"Summary: {result['summary_file']}")
-            print("\n" + "="*60)
-            print("TRANSCRIPT:")
-            print("="*60)
-            print(result['transcript'])
-            print("\n" + "="*60)
-            print("SUMMARY:")
-            print("="*60)
-            print(result['summary'])
+                new_files_processed = 0
+                for audio_path in current_audio_paths:
+                    if not is_file_processed(audio_path, processed_files):
+                        try:
+                            logger.info(f"Processing new file: {audio_path}")
+                            # Process the lesson
+                            result = transcriber.process_lesson(audio_path, output_dir="output")
 
-        except Exception as e:
-            print(f"Error processing {audio_path}: {e}")
-            continue
+                            # Update tracking
+                            file_hash = get_file_hash(audio_path)
+                            if file_hash:
+                                processed_files[str(audio_path)] = file_hash
+
+                            new_files_processed += 1
+
+                            print("\n" + "="*60)
+                            print(f"LESSON TRANSCRIPTION SUMMARY ({Path(audio_path).name})")
+                            print("="*60)
+                            print(f"Audio File: {result['audio_file']}")
+                            if 'transcript_file' in result:
+                                print(f"Transcript: {result['transcript_file']}")
+                                print(f"Summary: {result['summary_file']}")
+                            print("\n" + "="*60)
+                            print("TRANSCRIPT:")
+                            print("="*60)
+                            print(result['transcript'][:500] + "..." if len(result['transcript']) > 500 else result['transcript'])  # Truncate for console
+                            print("\n" + "="*60)
+                            print("SUMMARY:")
+                            print("="*60)
+                            print(result['summary'])
+
+                        except Exception as e:
+                            logger.error(f"Error processing {audio_path}: {e}")
+                            continue
+
+                if new_files_processed > 0:
+                    logger.info(f"Processed {new_files_processed} new file(s) in this cycle")
+
+                time.sleep(5)  # Wait 5 seconds before next check
+
+        except KeyboardInterrupt:
+            logger.info("Monitoring stopped by user")
+            save_processed_files(processed_files)
+            print("Monitoring mode stopped.")
+
+    else:
+        # Batch processing mode
+        for audio_path in audio_paths:
+            try:
+                # Process the lesson
+                result = transcriber.process_lesson(audio_path, output_dir="output")
+
+                print("\n" + "="*60)
+                print(f"LESSON TRANSCRIPTION SUMMARY ({Path(audio_path).name})")
+                print("="*60)
+                print(f"Audio File: {result['audio_file']}")
+                if 'transcript_file' in result:
+                    print(f"Transcript: {result['transcript_file']}")
+                    print(f"Summary: {result['summary_file']}")
+                print("\n" + "="*60)
+                print("TRANSCRIPT:")
+                print("="*60)
+                print(result['transcript'])
+                print("\n" + "="*60)
+                print("SUMMARY:")
+                print("="*60)
+                print(result['summary'])
+
+            except Exception as e:
+                print(f"Error processing {audio_path}: {e}")
+                continue
 
 
 if __name__ == "__main__":

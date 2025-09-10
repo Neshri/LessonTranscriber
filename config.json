@@ -1,6 +1,6 @@
 {
-  "whisper_model": "KBLab/kb-whisper-large",
-  "ollama_model": "gemma3:27b-it-qat",
+  "whisper_model": "KBLab/kb-whisper-tiny",
+  "ollama_model": "llama3.2:3b",
   "ollama_url": "http://127.0.0.1:11434",
   "summarization_prompt_template": "Din uppgift är att agera som en AI-assistent som specialiserat sig på att sammanfatta utbildningsmaterial. Skapa en tydlig och koncis sammanfattning av följande lektionstranskription. Använd markdown för att formatera texten. Inkludera en huvudrubrik för ämnet, följt av en kort inledande paragraf som summerar syftet, och avsluta med en punktlista som listar de viktigaste punkterna, argumenten och slutsatserna. Sammanfattningen får inte överstiga {max_length} ord.\n\nTranskription:\n{transcript}\n\nSammanfattning:",
   "max_summary_length": 1000,
