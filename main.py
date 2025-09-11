@@ -12,6 +12,7 @@ import time
 import hashlib
 import argparse
 from pathlib import Path
+from email_sender import EmailSender
 
 try:
     import whisper
@@ -585,6 +586,21 @@ Use Ctrl+C to stop monitoring.
                             logger.info(f"Processing new file: {audio_path}")
                             # Process the lesson
                             result = transcriber.process_lesson(audio_path, output_dir="output")
+
+                            # Send summary email
+                            email_recipients = config.get('email_recipients', [])
+                            if email_recipients:
+                                os.environ['EMAIL_RECIPIENTS'] = ','.join(email_recipients)
+                                try:
+                                    email_sender = EmailSender()
+                                    summary_path = Path(result['summary_file'])
+                                    success = email_sender.send_summary_email(summary_path)
+                                    if success:
+                                        logger.info("Summary email sent successfully")
+                                    else:
+                                        logger.warning("Failed to send summary email")
+                                except Exception as e:
+                                    logger.error(f"Failed to send email: {e}")
 
                             # Update tracking
                             file_hash = get_file_hash(audio_path)
