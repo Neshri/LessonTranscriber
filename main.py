@@ -590,9 +590,8 @@ Use Ctrl+C to stop monitoring.
                             # Send summary email
                             email_recipients = config.get('email_recipients', [])
                             if email_recipients:
-                                os.environ['EMAIL_RECIPIENTS'] = ','.join(email_recipients)
                                 try:
-                                    email_sender = EmailSender()
+                                    email_sender = EmailSender(recipients=email_recipients)
                                     summary_path = Path(result['summary_file'])
                                     success = email_sender.send_summary_email(summary_path)
                                     if success:

@@ -100,8 +100,8 @@ class AzureToken:
             error_message = result.get("error_description", "Unknown error while acquiring token")
             raise Exception(f"Failed to acquire token: {error_message}")
 
-def load_config_from_env() -> EmailConfig:
-    """Load email configuration from environment variables"""
+def load_config_from_env(recipients: Optional[List[str]] = None) -> EmailConfig:
+    """Load email configuration from environment variables or provided parameters"""
     missing_vars = []
     config = {}
 
@@ -115,11 +115,12 @@ def load_config_from_env() -> EmailConfig:
     if missing_vars:
         raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
-    # Get optional recipients from environment
-    recipients = []
-    recipients_str = os.getenv('EMAIL_RECIPIENTS', '')
-    if recipients_str:
-        recipients = [email.strip() for email in recipients_str.split(',') if email.strip()]
+    # Get recipients - use provided parameter or fall back to environment variable
+    if recipients is None:
+        recipients = []
+        recipients_str = os.getenv('EMAIL_RECIPIENTS', '')
+        if recipients_str:
+            recipients = [email.strip() for email in recipients_str.split(',') if email.strip()]
 
     return EmailConfig(
         client_id=config['azure_client_id'],
@@ -231,8 +232,17 @@ def graph_send_email(subject: str, body: str, recipients: List[str], config: Ema
 class EmailSender:
     """Main email sender class for lesson summaries"""
 
-    def __init__(self, config: Optional[EmailConfig] = None):
-        self.config = config or load_config_from_env()
+    def __init__(self, config: Optional[EmailConfig] = None, recipients: Optional[List[str]] = None):
+        """
+        Initialize the EmailSender.
+
+        Args:
+            config: Optional EmailConfig object, will load from env if not provided
+            recipients: Optional list of recipient emails, overrides env var if provided
+        """
+        if config is None:
+            config = load_config_from_env(recipients=recipients)
+        self.config = config
         self.sent_emails_file = Path("sent_emails.json")
         self.sent_emails = self._load_sent_emails()
 
