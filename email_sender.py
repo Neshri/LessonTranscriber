@@ -15,17 +15,25 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
-try:
-    import msal
-except ImportError:
-    msal = None
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logger.info("Loaded environment variables from .env file")
+except ImportError:
+    logger.warning("python-dotenv not installed, environment variables must be set manually")
+
+try:
+    import msal
+except ImportError:
+    msal = None
+
 
 # Required environment variables
 REQUIRED_ENV_VARS = [
@@ -311,6 +319,10 @@ class EmailSender:
         if self._is_summary_sent(summary_path):
             logger.info(f"Summary already sent: {summary_path}")
             return False
+
+        # Log configuration details for debugging
+        logger.info(f"Email configuration: TARGET_USER_GRAPH_ID={self.config.target_user_graph_id}")
+        logger.info(f"Recipients: {self.config.recipients}")
 
         try:
             # Read summary content

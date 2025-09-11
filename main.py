@@ -530,20 +530,30 @@ def is_file_processed(file_path, processed_files):
 
 
 def main():
+    # Load configuration early to get default audio source
+    early_config = None
+    try:
+        with open('config.json', 'r') as f:
+            early_config = json.load(f)
+        default_audio_source = early_config.get('default_audio_source', 'lesson_audio')
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Fallback if config.json is missing or invalid
+        default_audio_source = 'lesson_audio'
+
     parser = argparse.ArgumentParser(
         description="Transcribe and summarize audio lessons.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Supported formats: mp3, wav, m4a, flac, ogg
 Make sure Ollama is running locally for summarization.
 
-In monitor mode, the program will continuously check the lesson_audio directory
+In monitor mode, the program will continuously check the {default_audio_source} directory
 for new files every 5 seconds and process them automatically.
 Use Ctrl+C to stop monitoring.
         """
     )
-    parser.add_argument('audio_source', nargs='?', default='lesson_audio',
-                        help='Path to audio file or directory (default: lesson_audio/)')
+    parser.add_argument('audio_source', nargs='?', default=default_audio_source,
+                        help=f'Path to audio file or directory (default: {default_audio_source}/)')
     parser.add_argument('--monitor', action='store_true',
                         help='Enable continuous monitoring mode')
 
@@ -563,12 +573,10 @@ Use Ctrl+C to stop monitoring.
         print(f"Error accessing audio source: {e}")
         sys.exit(1)
 
-    # Load configuration
-    try:
-        with open('config.json', 'r') as f:
-            config = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"Error loading config.json: {e}")
+    # Use the configuration loaded earlier
+    config = early_config
+    if config is None:
+        print("Error loading config.json: Configuration was not loaded successfully.")
         print("Please ensure config.json exists and is valid.")
         sys.exit(1)
 

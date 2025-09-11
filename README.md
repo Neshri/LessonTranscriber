@@ -68,10 +68,14 @@ SUMMARY:
 
 ## Configuration
 
-- **Whisper Model**: Default is "base". Change in `main.py` for different sizes (tiny, small, medium, large)
-- **Ollama Model**: Default is "llama3.2". Change in the `generate_summary` method
-- **Summary Length**: Default max 300 words. Configurable in `generate_summary` call
+The application uses `config.json` for configuration options:
+
+- **Whisper Model**: Default is "base". Change in `config.json` for different sizes (tiny, small, medium, large)
+- **Ollama Model**: Default is "llama3.2". Change in `config.json`
+- **Summary Length**: Default max 1000 words. Configurable in `config.json`
 - **Output Directory**: Defaults to "output". Can be customized
+- **Default Audio Source**: Defaults to "lesson_audio". Configurable via `default_audio_source` in `config.json`
+- **Email Recipients**: List of email addresses to receive summaries (requires Azure Graph API setup)
 
 ## Supported Audio Formats
 
