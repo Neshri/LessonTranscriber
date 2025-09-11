@@ -65,8 +65,8 @@ def create_sample_readme():
 # How to Test Lesson Transcriber
 
 ## 1. Prepare Audio Files
-Place audio files (mp3, wav, m4a, flac, ogg) in the 'audio/' subdirectory or any directory you specify.
-For example: audio/lesson.mp3
+Place audio files (mp3, wav, m4a, flac, ogg) in the 'lesson_audio/' subdirectory or any directory you specify.
+For example: lesson_audio/lesson.mp3
 
 ## 2. Ensure Prerequisites
 - Python virtual environment activated
@@ -75,10 +75,10 @@ For example: audio/lesson.mp3
 
 ## 3. Run the Transcriber
 ### Options:
-- `python main.py` (defaults to processing all audio files in 'audio/' directory)
-- `python main.py audio/lesson.mp3` (processes single file)
-- `python main.py ./audio/` (processes all files in specified directory)
-- `python main.py /path/to/your/audio/lesson.mp3` (absolute path to file)
+- `python main.py` (defaults to processing all audio files in 'lesson_audio/' directory)
+- `python main.py lesson_audio/lesson.mp3` (processes single file)
+- `python main.py ./lesson_audio/` (processes all files in specified directory)
+- `python main.py /path/to/your/lesson_audio/lesson.mp3` (absolute path to file)
 
 ## 4. Expected Output
 - Files saved to 'output/' directory:
@@ -114,12 +114,12 @@ def main():
     if ollama_ok and whisper_ok:
         print("\nSUCCESS: All tests passed! Ready to transcribe lessons.")
         print("\nNext steps:")
-        print("1. Place audio file in 'audio/' directory (mp3/wav/m4a/flac/ogg)")
-        print("2. Run: python main.py [audio_source] (defaults to 'audio/')")
+        print("1. Place audio file in 'lesson_audio/' directory (mp3/wav/m4a/flac/ogg)")
+        print("2. Run: python main.py [audio_source] (defaults to 'lesson_audio/')")
         print("   Examples:")
-        print("   - python main.py (uses 'audio/' directory)")
+        print("   - python main.py (uses 'lesson_audio/' directory)")
         print("   - python main.py my_file.mp3")
-        print("   - python main.py ./audio/")
+        print("   - python main.py ./lesson_audio/")
         create_sample_readme()
     else:
         print("\nWARNING: Some tests failed. Please fix issues above before using.")

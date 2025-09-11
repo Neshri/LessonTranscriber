@@ -521,13 +521,13 @@ def main():
 Supported formats: mp3, wav, m4a, flac, ogg
 Make sure Ollama is running locally for summarization.
 
-In monitor mode, the program will continuously check the audio directory
+In monitor mode, the program will continuously check the lesson_audio directory
 for new files every 5 seconds and process them automatically.
 Use Ctrl+C to stop monitoring.
         """
     )
-    parser.add_argument('audio_source', nargs='?', default='audio',
-                        help='Path to audio file or directory (default: audio/)')
+    parser.add_argument('audio_source', nargs='?', default='lesson_audio',
+                        help='Path to audio file or directory (default: lesson_audio/)')
     parser.add_argument('--monitor', action='store_true',
                         help='Enable continuous monitoring mode')
 

@@ -7,7 +7,7 @@ import sys
 import yt_dlp
 from pathlib import Path
 
-def download_audio_from_youtube(url, output_dir="audio"):
+def download_audio_from_youtube(url, output_dir="lesson_audio"):
     """
     Downloads the best quality audio from a YouTube URL and saves it as an MP3
     in the specified directory.
@@ -24,7 +24,7 @@ def download_audio_from_youtube(url, output_dir="audio"):
             'preferredcodec': 'mp3',
             'preferredquality': '192',  # Bitrate in kbit/s
         }],
-        # Save files to the 'audio' directory with their title
+        # Save files to the 'lesson_audio' directory with their title
         'outtmpl': str(output_path / '%(title)s.%(ext)s'),
         'quiet': False, # Set to True to hide console output
     }

@@ -2,8 +2,8 @@
 # How to Test Lesson Transcriber
 
 ## 1. Prepare Audio Files
-Place audio files (mp3, wav, m4a, flac, ogg) in the 'audio/' subdirectory or any directory you specify.
-For example: audio/lesson.mp3
+Place audio files (mp3, wav, m4a, flac, ogg) in the 'lesson_audio/' subdirectory or any directory you specify.
+For example: lesson_audio/lesson.mp3
 
 ## 2. Ensure Prerequisites
 - Python virtual environment activated
@@ -12,10 +12,10 @@ For example: audio/lesson.mp3
 
 ## 3. Run the Transcriber
 ### Options:
-- `python main.py` (defaults to processing all audio files in 'audio/' directory)
-- `python main.py audio/lesson.mp3` (processes single file)
-- `python main.py ./audio/` (processes all files in specified directory)
-- `python main.py /path/to/your/audio/lesson.mp3` (absolute path to file)
+- `python main.py` (defaults to processing all audio files in 'lesson_audio/' directory)
+- `python main.py lesson_audio/lesson.mp3` (processes single file)
+- `python main.py ./lesson_audio/` (processes all files in specified directory)
+- `python main.py /path/to/your/lesson_audio/lesson.mp3` (absolute path to file)
 
 ## 4. Expected Output
 - Files saved to 'output/' directory:
