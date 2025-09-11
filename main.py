@@ -14,6 +14,28 @@ import argparse
 from pathlib import Path
 from email_sender import EmailSender
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logger.info("Loaded environment variables from .env file")
+except ImportError:
+    logger.warning("python-dotenv not installed, environment variables must be set manually")
+
+# Check if required environment variables are loaded
+required_env_vars = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'TARGET_USER_GRAPH_ID']
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    logger.warning(f"Missing required environment variables: {', '.join(missing_vars)}")
+else:
+    logger.info("All required environment variables are loaded")
+
 try:
     import whisper
     WHISPER_AVAILABLE = True
@@ -29,12 +51,6 @@ except ImportError:
     torch = None
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 
 class LessonTranscriber:
