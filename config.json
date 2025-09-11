@@ -8,5 +8,5 @@
   "chunk_size_mb": 10,
   "max_context_tokens": 4096,
   "overlap_tokens": 200,
-  "email_recipients": ["user1@example.com", "user2@example.com"]
+  "email_recipients": ["anton.lundgren94@gmail.com"]
 }
