@@ -12,6 +12,7 @@ import jwt
 import time
 import hashlib
 from pathlib import Path
+import markdown
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -329,6 +330,9 @@ class EmailSender:
             summary_content = summary_path.read_text(encoding='utf-8')
             summary_name = summary_path.stem.replace('_summary', '').replace('_', ' ').title()
 
+            # Convert markdown to HTML
+            html_content = markdown.markdown(summary_content)
+
             # Create email subject and body
             subject = f"Lesson Summary: {summary_name}"
 
@@ -338,8 +342,8 @@ class EmailSender:
             <body>
                 <h1>Lesson Summary: {summary_name}</h1>
                 <h2>Summary Content</h2>
-                <div style="white-space: pre-line;">
-                {summary_content}
+                <div>
+                {html_content}
                 </div>
                 <hr>
                 <p><em>This summary was automatically generated from the lesson transcription.</em></p>
