@@ -388,7 +388,6 @@ class EmailSender:
             body = f"""
             <html>
             <body>
-                <h1>Lektionssammanfattning</h1>
                 <div>
                 {html_content}
                 </div>
