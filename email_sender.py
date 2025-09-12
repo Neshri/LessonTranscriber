@@ -24,6 +24,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+try:
     from dotenv import load_dotenv
     load_dotenv()
     logger.info("Loaded environment variables from .env file")
@@ -108,6 +112,7 @@ class AzureToken:
         else:
             error_message = result.get("error_description", "Unknown error while acquiring token")
             raise Exception(f"Failed to acquire token: {error_message}")
+
 
 def load_config_from_env(recipients: Optional[List[str]] = None) -> EmailConfig:
     """Load email configuration from environment variables or provided parameters"""
@@ -266,6 +271,36 @@ class EmailSender:
                 return {}
         return {}
 
+    def _extract_subject_from_summary(self, summary_content: str) -> str:
+        """Extract Swedish subject line from summary content after ---Subject: delimiter"""
+        lines = summary_content.split('\n')
+        subject_lines = []
+
+        collecting_subject = False
+        for line in lines:
+            stripped_line = line.strip()
+            if stripped_line == '---Subject:':
+                collecting_subject = True
+                continue
+            elif collecting_subject:
+                # Collect subject lines until we hit another section or end
+                if stripped_line and not stripped_line.startswith('---'):
+                    subject_lines.append(stripped_line)
+                else:
+                    break  # Stop at next section or empty line
+
+        subject = ' '.join(subject_lines).strip()
+
+        # Fallback to default if no subject found
+        if not subject:
+            return self._generate_default_subject()
+
+        return subject
+
+    def _generate_default_subject(self) -> str:
+        """Generate a default Swedish subject line"""
+        return "Lektionssammanfattning"
+
     def _save_sent_emails(self):
         """Save tracking of sent emails"""
         try:
@@ -330,17 +365,30 @@ class EmailSender:
             summary_content = summary_path.read_text(encoding='utf-8')
             summary_name = summary_path.stem.replace('_summary', '').replace('_', ' ').title()
 
-            # Convert markdown to HTML
-            html_content = markdown.markdown(summary_content)
+            # Parse subject from summary content
+            subject = self._extract_subject_from_summary(summary_content)
 
-            # Create email subject and body
-            subject = f"Lektionssammanfattning: {summary_name}"
+            # Remove the subject delimiter and content from summary for email body
+            # Extract only the summary part before ---Subject:
+            summary_lines = summary_content.split('\n')
+            summary_only = []
+            in_subject_section = False
+            for line in summary_lines:
+                if line.strip() == '---Subject:':
+                    in_subject_section = True
+                    break
+                summary_only.append(line)
+
+            cleaned_summary = '\n'.join(summary_only).strip()
+
+            # Convert markdown to HTML
+            html_content = markdown.markdown(cleaned_summary)
 
             # Format body as HTML
             body = f"""
             <html>
             <body>
-                <h1>Lektionssammanfattning: {summary_name}</h1>
+                <h1>Lektionssammanfattning</h1>
                 <div>
                 {html_content}
                 </div>
@@ -447,7 +495,7 @@ Examples:
 
         elif args.batch_send:
             # Send all new summaries
-            sent_count = email_sender.send_all_new_summaries(args.output_dir)
+            sent_count = email_sender.send_all_new_summaries(args.output-dir)
             print(f"✅ Sent {sent_count} new lesson summaries")
 
         else:
