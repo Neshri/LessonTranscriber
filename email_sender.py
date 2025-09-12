@@ -328,24 +328,24 @@ class EmailSender:
         try:
             # Read summary content
             summary_content = summary_path.read_text(encoding='utf-8')
+            summary_name = summary_path.stem.replace('_summary', '').replace('_', ' ').title()
 
             # Convert markdown to HTML
             html_content = markdown.markdown(summary_content)
 
             # Create email subject and body
-            subject = "Ny Lektionssammanfattning"
+            subject = f"Lektionssammanfattning: {summary_name}"
 
             # Format body as HTML
             body = f"""
             <html>
             <body>
-                <h1>Lektionssammanfattning</h1>
-                <h2>Sammanfattningsinnehåll</h2>
+                <h1>Lektionssammanfattning: {summary_name}</h1>
                 <div>
                 {html_content}
                 </div>
                 <hr>
-                <p><em>Denna sammanfattning genererades automatiskt från lektionsavskriften.</em></p>
+                <p><em>Denna sammanfattning genererades automatiskt från lektionens AI-genererade transkription.</em></p>
             </body>
             </html>
             """
@@ -359,7 +359,7 @@ class EmailSender:
             )
 
             if success:
-                self._mark_summary_sent(summary_path, "")
+                self._mark_summary_sent(summary_path, summary_name)
                 logger.info(f"Lesson summary emailed: {summary_path}")
                 return True
 
