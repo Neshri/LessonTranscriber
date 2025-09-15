@@ -77,17 +77,12 @@ class LessonTranscriber:
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
-        # Load faster-whisper (GPU-optimized) if available, otherwise fallback
         if FASTER_WHISPER_AVAILABLE:
             try:
                 logger.info("Loading faster-whisper model (GPU-optimized)...")
                 self._load_faster_whisper_model()
             except Exception as e:
                 logger.error(f"Failed to load faster-whisper: {e}")
-                logger.error("GPU/cuDNN setup issue detected. Please check:")
-                logger.error("1. CUDA and cuDNN versions compatibility")
-                logger.error("2. Container GPU passthrough configuration")
-                logger.error("3. Required libraries: libcudnn, libcublas, etc.")
                 raise Exception(f"GPU setup incompatible with faster-whisper. Error: {e}")
         elif self._is_standard_whisper_model(self.whisper_model_name) and WHISPER_AVAILABLE:
             try:
