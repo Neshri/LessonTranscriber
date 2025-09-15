@@ -77,26 +77,36 @@ class LessonTranscriber:
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
-        # Try to load as standard Whisper model first
-        if self._is_standard_whisper_model(self.whisper_model_name) and WHISPER_AVAILABLE:
+        # Load faster-whisper (GPU-optimized) if available, otherwise fallback
+        if FASTER_WHISPER_AVAILABLE:
             try:
-                self.pipe = None  # Using whisper library, not pipeline
+                logger.info("Loading faster-whisper model (GPU-optimized)...")
+                self._load_faster_whisper_model()
+            except Exception as e:
+                logger.error(f"Failed to load faster-whisper: {e}")
+                logger.error("GPU/cuDNN setup issue detected. Please check:")
+                logger.error("1. CUDA and cuDNN versions compatibility")
+                logger.error("2. Container GPU passthrough configuration")
+                logger.error("3. Required libraries: libcudnn, libcublas, etc.")
+                raise Exception(f"GPU setup incompatible with faster-whisper. Error: {e}")
+        elif self._is_standard_whisper_model(self.whisper_model_name) and WHISPER_AVAILABLE:
+            try:
+                logger.info("Falling back to standard Whisper model...")
+                self.pipe = None
                 self.whisper_model = whisper.load_model(self.whisper_model_name)
                 self.use_standard_whisper = True
-                logger.info("Using standard Whisper model")
+                logger.info("Successfully loaded standard Whisper model")
             except Exception as e:
-                logger.warning(f"Failed to load standard Whisper model {self.whisper_model_name}: {e}")
+                logger.warning(f"Failed to load standard Whisper model: {e}")
                 if HUGGINGFACE_AVAILABLE:
-                    logger.info("Falling back to Hugging Face pipeline")
+                    logger.info("Falling back to Hugging Face transformers...")
                     self._load_huggingface_model()
                 else:
-                    raise Exception(f"No valid transcription models available. Please install transformers or use a standard Whisper model.")
-        elif FASTER_WHISPER_AVAILABLE:
-            self._load_faster_whisper_model()
+                    raise Exception("No valid transcription models available. Please install required packages.")
         elif HUGGINGFACE_AVAILABLE:
             self._load_huggingface_model()
         else:
-            raise Exception("Neither standard Whisper, faster-whisper, nor Hugging Face transformers available. Please install required packages.")
+            raise Exception("No transcription models available. Please install faster-whisper, openai-whisper, or transformers.")
 
         logger.info("Lesson Transcriber initialized successfully")
 
@@ -155,40 +165,46 @@ class LessonTranscriber:
             raise Exception(f"Failed to load Whisper model. Error: {e}")
 
     def _load_faster_whisper_model(self):
-        """Load Whisper model using faster-whisper"""
+        """Load Whisper model using faster-whisper (GPU required)"""
+        logger.info(f"Loading faster-whisper model: {self.whisper_model_name}")
+
+        # Determine device based on config
+        if self.gpu_device == "auto":
+            if not torch.cuda.is_available():
+                raise Exception("GPU required for faster-whisper but CUDA not available")
+            device = "cuda"
+            compute_type = "float16"
+        elif self.gpu_device == "cpu":
+            raise Exception("faster-whisper requires GPU. Use 'auto' or 'cuda:X' for gpu_device")
+        elif self.gpu_device.startswith("cuda:"):
+            device = f"cuda:{self.gpu_device.split(':')[1]}"
+            compute_type = "float16"
+        else:
+            raise Exception(f"Invalid gpu_device '{self.gpu_device}' for faster-whisper. Use 'auto' or 'cuda:X'")
+
+        logger.info(f"Using GPU device: {device} with compute_type: {compute_type}")
+
         try:
-            logger.info(f"Loading faster-whisper model: {self.whisper_model_name}")
-
-            # Determine device based on config
-            if self.gpu_device == "auto":
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                compute_type = "float16" if torch.cuda.is_available() else "int8"
-            elif self.gpu_device == "cpu":
-                device = "cpu"
-                compute_type = "int8"
-            elif self.gpu_device.startswith("cuda:"):
-                device = f"cuda:{self.gpu_device.split(':')[1]}"
-                compute_type = "float16"
-            else:
-                logger.warning(f"Unknown gpu_device setting: {self.gpu_device}. Using auto-detection.")
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                compute_type = "float16" if torch.cuda.is_available() else "int8"
-
-            # Log device information for debugging
-            logger.info(f"Using device: {device} with compute_type: {compute_type}")
-
             self.whisper_model = WhisperModel(
                 self.whisper_model_name,
                 device=device,
                 compute_type=compute_type
             )
+
             self.pipe = None  # Not using transformers pipeline
             self.use_standard_whisper = False
             self.use_faster_whisper = True
-            logger.info("Successfully loaded faster-whisper model")
+            logger.info(f"Successfully loaded faster-whisper model on {device}")
+
         except Exception as e:
-            logger.error(f"Failed to load faster-whisper model {self.whisper_model_name}: {e}")
-            raise Exception(f"Failed to load Whisper model. Error: {e}")
+            logger.error(f"Failed to load faster-whisper model: {e}")
+            logger.error("This is likely a CUDA/cuDNN compatibility issue in your container")
+            logger.error("Required GPU libraries may be missing or incompatible:")
+            logger.error("- libcudnn (version 8.x or 9.x)")
+            logger.error("- libcublas")
+            logger.error("- libcusparse")
+            logger.error("- libcusolver")
+            raise Exception(f"GPU incompatible with faster-whisper. Fix CUDA setup or use alternative model. Error: {e}")
 
     def _estimate_token_count(self, text):
         """Better estimate token count using word-based estimation"""
