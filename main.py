@@ -284,28 +284,39 @@ class LessonTranscriber:
             transcript=transcript_chunk
         )
 
+        logger.info(f"Generated prompt (first 500 chars): {prompt[:500]}...")
+        logger.info(f"Full prompt length: {len(prompt)} characters")
+
         try:
+            request_payload = {
+                "model": self.ollama_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_ctx": context_limit,
+                    "temperature": 0.1,
+                    "top_p": 0.9,
+                    "repeat_penalty": 1.1
+                }
+            }
+
+            logger.info(f"Sending request to Ollama with model: {self.ollama_model}")
+
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
-                json={
-                    "model": self.ollama_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "num_ctx": context_limit,
-                        "temperature": 0.1,
-                        "top_p": 0.9,
-                        "repeat_penalty": 1.1
-                    }
-                },
-                timeout=300  # 5 minute timeout
+                json=request_payload,
+                timeout=900  # 15 minute timeout for large chunks
             )
 
             logger.info(f"Summarization API call completed with status: {response.status_code}")
 
             if response.status_code == 200:
                 result = response.json()
-                summary = result.get("response", "").strip()
+                raw_response = result.get("response", "")
+                logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
+                logger.info(f"Full response length: {len(raw_response)} characters")
+
+                summary = raw_response.strip()
                 logger.info(f"Chunk summary completed ({len(summary)} characters)")
                 return summary
             else:
@@ -323,33 +334,60 @@ class LessonTranscriber:
 
         logger.info(f"Combining {len(chunk_summaries)} chunk summaries")
 
-        combined_summary_prompt = f"""You have summaries from {len(chunk_summaries)} parts of a longer lesson transcript.
-Please create a single, cohesive summary that combines all the key points and maintains a logical flow.
-Keep the summary under {self.max_summary_length} words.
+        combined_summary_prompt = f"""Du har sammanfattningar från {len(chunk_summaries)} delar av en längre lektionsutskrift.
 
-Individual summaries:
-""" + "\n\n".join(f"Part {i+1}: {summary}" for i, summary in enumerate(chunk_summaries)) + "\n\nFinal Combined Summary:"
+**Ditt mål är att skapa två saker:**
+1. En enda, sammanhängande sammanfattning som kombinerar alla viktiga punkter och upprätthåller ett logiskt flöde.
+2. En svensk ämnesrad på 3-6 ord som fångar hela lektionens huvudtema.
+
+**För sammanfattningen:** Använd markdown för att formatera texten. Håll sammanfattningen under {self.max_summary_length} ord.
+
+**För ämnesraden:** Den måste vara på svenska, mellan 3-6 ord, och beskriva hela lektionens kärna.
+
+**Följ detta outputformat exakt:**
+Sammanfattning:
+[din sammanfattning här]
+
+---
+Ämnesrad:
+[svensk ämnesrad här]
+
+**Individuella sammanfattningar att arbeta från:**
+""" + "\n\n".join(f"Del {i+1}: {summary}" for i, summary in enumerate(chunk_summaries))
+
+        logger.info(f"Combined summary prompt (first 500 chars): {combined_summary_prompt[:500]}...")
+        logger.info(f"Full combined prompt length: {len(combined_summary_prompt)} characters")
 
         try:
+            request_payload = {
+                "model": self.ollama_model,
+                "prompt": combined_summary_prompt,
+                "stream": False,
+                "options": {
+                    "num_ctx": self.max_context_tokens,
+                    "temperature": 0.05,  # Even more deterministic for combining
+                    "top_p": 0.8,
+                    "repeat_penalty": 1.2
+                }
+            }
+
+            logger.info(f"Sending combined summary request to Ollama with model: {self.ollama_model}")
+
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
-                json={
-                    "model": self.ollama_model,
-                    "prompt": combined_summary_prompt,
-                    "stream": False,
-                    "options": {
-                        "num_ctx": self.max_context_tokens,
-                        "temperature": 0.05,  # Even more deterministic for combining
-                        "top_p": 0.8,
-                        "repeat_penalty": 1.2
-                    }
-                },
-                timeout=600  # 10 minute timeout for final summary
+                json=request_payload,
+                timeout=1200  # 20 minute timeout for final summary
             )
+
+            logger.info(f"Combined summary API call completed with status: {response.status_code}")
 
             if response.status_code == 200:
                 result = response.json()
-                final_summary = result.get("response", "").strip()
+                raw_response = result.get("response", "")
+                logger.info(f"Raw combined summary response (first 500 chars): {raw_response[:500]}...")
+                logger.info(f"Full combined response length: {len(raw_response)} characters")
+
+                final_summary = raw_response.strip()
                 logger.info(f"Final combined summary completed ({len(final_summary)} characters)")
                 return final_summary
             else:
