@@ -50,6 +50,12 @@ except ImportError:
     HUGGINGFACE_AVAILABLE = False
     torch = None
 
+try:
+    from faster_whisper import WhisperModel
+    FASTER_WHISPER_AVAILABLE = True
+except ImportError:
+    FASTER_WHISPER_AVAILABLE = False
+
 
 
 
@@ -85,10 +91,12 @@ class LessonTranscriber:
                     self._load_huggingface_model()
                 else:
                     raise Exception(f"No valid transcription models available. Please install transformers or use a standard Whisper model.")
+        elif FASTER_WHISPER_AVAILABLE:
+            self._load_faster_whisper_model()
         elif HUGGINGFACE_AVAILABLE:
             self._load_huggingface_model()
         else:
-            raise Exception("Neither standard Whisper nor Hugging Face transformers available. Please install required packages.")
+            raise Exception("Neither standard Whisper, faster-whisper, nor Hugging Face transformers available. Please install required packages.")
 
         logger.info("Lesson Transcriber initialized successfully")
 
@@ -144,6 +152,42 @@ class LessonTranscriber:
             logger.info("Successfully loaded Hugging Face Whisper model")
         except Exception as e:
             logger.error(f"Failed to load Hugging Face model {self.whisper_model_name}: {e}")
+            raise Exception(f"Failed to load Whisper model. Error: {e}")
+
+    def _load_faster_whisper_model(self):
+        """Load Whisper model using faster-whisper"""
+        try:
+            logger.info(f"Loading faster-whisper model: {self.whisper_model_name}")
+
+            # Determine device based on config
+            if self.gpu_device == "auto":
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                compute_type = "float16" if torch.cuda.is_available() else "int8"
+            elif self.gpu_device == "cpu":
+                device = "cpu"
+                compute_type = "int8"
+            elif self.gpu_device.startswith("cuda:"):
+                device = f"cuda:{self.gpu_device.split(':')[1]}"
+                compute_type = "float16"
+            else:
+                logger.warning(f"Unknown gpu_device setting: {self.gpu_device}. Using auto-detection.")
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                compute_type = "float16" if torch.cuda.is_available() else "int8"
+
+            # Log device information for debugging
+            logger.info(f"Using device: {device} with compute_type: {compute_type}")
+
+            self.whisper_model = WhisperModel(
+                self.whisper_model_name,
+                device=device,
+                compute_type=compute_type
+            )
+            self.pipe = None  # Not using transformers pipeline
+            self.use_standard_whisper = False
+            self.use_faster_whisper = True
+            logger.info("Successfully loaded faster-whisper model")
+        except Exception as e:
+            logger.error(f"Failed to load faster-whisper model {self.whisper_model_name}: {e}")
             raise Exception(f"Failed to load Whisper model. Error: {e}")
 
     def _estimate_token_count(self, text):
@@ -242,6 +286,9 @@ class LessonTranscriber:
             if self.whisper_model is None:
                 logger.info(f"Loading Whisper model: {self.whisper_model_name}")
                 self.whisper_model = whisper.load_model(self.whisper_model_name)
+        elif hasattr(self, 'use_faster_whisper') and self.use_faster_whisper:
+            if self.whisper_model is None:
+                self._load_faster_whisper_model()
         else:
             if self.pipe is None:
                 self._load_huggingface_model()
@@ -251,6 +298,11 @@ class LessonTranscriber:
                 # Using standard openai-whisper
                 result = self.whisper_model.transcribe(audio_path)
                 transcript = result["text"].strip()
+            elif hasattr(self, 'use_faster_whisper') and self.use_faster_whisper:
+                # Using faster-whisper
+                segments, info = self.whisper_model.transcribe(audio_path, beam_size=5)
+                logger.info(f"Detected language '{info.language}' with probability {info.language_probability:.2f}")
+                transcript = " ".join([segment.text for segment in segments]).strip()
             else:
                 # Using Hugging Face pipeline - enable timestamps for long audio
                 result = self.pipe(audio_path, return_timestamps=True)
@@ -334,26 +386,27 @@ class LessonTranscriber:
 
         logger.info(f"Combining {len(chunk_summaries)} chunk summaries")
 
-        combined_summary_prompt = f"""Du har sammanfattningar från {len(chunk_summaries)} delar av en längre lektionsutskrift.
+        combined_summary_prompt = f"""
+**ROLL OCH MÅL:**
+Agera som en AI-redaktör. Ditt uppdrag är att kombinera flera del-sammanfattningar från en lektion till ett enda, högkvalitativt slutresultat. Du ska producera både en sammanhängande sammanfattning och en kort, relevant ämnesrad.
 
-**Ditt mål är att skapa två saker:**
-1. En enda, sammanhängande sammanfattning som kombinerar alla viktiga punkter och upprätthåller ett logiskt flöde.
-2. En svensk ämnesrad på 3-6 ord som fångar hela lektionens huvudtema.
+**INDATA (INDIVIDUELLA SAMMANFATTNINGAR):**
+{"\n\n".join(f"Del {i+1}: {summary}" for i, summary in enumerate(chunk_summaries))}
 
-**För sammanfattningen:** Använd markdown för att formatera texten. Håll sammanfattningen under {self.max_summary_length} ord.
+**REGLER OCH FORMAT:**
+1.  **Sammanfattning:** Skapa en enda, sammanhängande text. Använd markdown. Överskrid inte {self.max_summary_length} ord.
+2.  **Ämnesrad:** Skapa en svensk ämnesrad på 3-6 ord som fångar lektionens kärna.
+3.  **Outputformat:** Ditt svar MÅSTE följa denna mall exakt, inklusive separatorn '---'.
 
-**För ämnesraden:** Den måste vara på svenska, mellan 3-6 ord, och beskriva hela lektionens kärna.
-
-**Följ detta outputformat exakt:**
 Sammanfattning:
-[din sammanfattning här]
+[Skriv den kombinerade sammanfattningen här]
 
 ---
 Ämnesrad:
-[svensk ämnesrad här]
+[Skriv den svenska ämnesraden här]
 
-**Individuella sammanfattningar att arbeta från:**
-""" + "\n\n".join(f"Del {i+1}: {summary}" for i, summary in enumerate(chunk_summaries))
+**Börja ditt svar nu.**
+"""
 
         logger.info(f"Combined summary prompt (first 500 chars): {combined_summary_prompt[:500]}...")
         logger.info(f"Full combined prompt length: {len(combined_summary_prompt)} characters")
@@ -466,6 +519,9 @@ Sammanfattning:
 
             # Unload Whisper to free memory before summarization
             if self.use_standard_whisper and self.whisper_model is not None:
+                del self.whisper_model
+                self.whisper_model = None
+            elif hasattr(self, 'use_faster_whisper') and self.use_faster_whisper and self.whisper_model is not None:
                 del self.whisper_model
                 self.whisper_model = None
             elif not self.use_standard_whisper and self.pipe is not None:
