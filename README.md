@@ -14,7 +14,7 @@ A Python application that transcribes audio lessons using OpenAI's Whisper model
 
 1. **Python 3.8+** installed on your system
 2. **Ollama** running locally (download from [ollama.com](https://ollama.com/))
-3. **Pull a language model** in Ollama (e.g., `ollama pull llama3.2`)
+3. **Pull a language model** in Ollama (e.g., `ollama pull gemma3:27b-it-qat`)
 
 ## Installation
 
@@ -33,11 +33,26 @@ A Python application that transcribes audio lessons using OpenAI's Whisper model
 
 ## Usage
 
+### For detailed usage examples and testing guide, see [`SAMPLE_USAGE.md`](SAMPLE_USAGE.md).
+
 ### Basic Usage
 
 ```bash
 python main.py path/to/your/lesson.mp3
 ```
+
+### Monitoring Mode
+
+```bash
+python main.py --monitor
+```
+
+This command automatically monitors the `lesson_audio/` directory for new audio files. The workflow includes:
+
+1. Scanning for new audio files in the specified directory
+2. Transcribing each new file using Whisper
+3. Generating a concise summary using Ollama
+4. Emailing the summary to addresses listed in `config.json` (requires .env setup for email functionality)
 
 ### Example Output
 
@@ -71,11 +86,12 @@ SUMMARY:
 The application uses `config.json` for configuration options:
 
 - **Whisper Model**: Default is "base". Change in `config.json` for different sizes (tiny, small, medium, large)
-- **Ollama Model**: Default is "llama3.2". Change in `config.json`
+- **Ollama Model**: Default is "gemma3:27b-it-qat". Change in `config.json`
 - **Summary Length**: Default max 1000 words. Configurable in `config.json`
 - **Output Directory**: Defaults to "output". Can be customized
 - **Default Audio Source**: Defaults to "lesson_audio". Configurable via `default_audio_source` in `config.json`
 - **Email Recipients**: List of email addresses to receive summaries (requires Azure Graph API setup)
+- **.env File**: Required for email functionality; copy `example.env` and configure with your Azure Graph API credentials (see Email Sender section below for details)
 
 ## Supported Audio Formats
 
@@ -120,7 +136,12 @@ LessonTranscriber/
 ├── requirements.txt    # Python dependencies
 ├── README.md           # This file
 ├── .gitignore          # Git ignore rules
-└── output/             # Generated transcripts and summaries (auto-created)
+├── config.json         # Configuration file
+├── example.env         # Environment variables template
+├── email_sender.py     # Email sending script (Azure Graph API)
+├── SAMPLE_USAGE.md     # Quick usage examples and testing guide
+├── lesson_audio/       # Default directory for audio files
+├── output/             # Generated transcripts and summaries (auto-created)
 ```
 
 ## Contributing
@@ -256,5 +277,3 @@ This script is designed to be used alongside the main transcription loop:
 3. Future integration: Call email sender from transcription completion
 
 ---
-
-# Lesson Transcriber (Whisper + Ollama)
