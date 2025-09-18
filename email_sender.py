@@ -467,7 +467,7 @@ class EmailSender:
             int: Number of emails successfully sent on retry
         """
         if not self.failed_emails:
-            logger.info("No failed emails to retry")
+            #logger.info("No failed emails to retry")
             return 0
 
         retry_count = 0
