@@ -70,6 +70,7 @@ class LessonTranscriber:
         self.ollama_model = config['ollama_model']
         self.max_summary_length = config.get('max_summary_length', 1000)
         self.summarization_prompt_template = config['summarization_prompt_template']
+        self.chunk_summarization_prompt_template = config.get('chunk_summarization_prompt_template', 'Summarize the key points of this text: {transcript}')
         self.combine_summaries_prompt_template = config.get('combine_summaries_prompt_template', self._get_default_combine_prompt())
         self.gpu_device = config.get('gpu_device', 'auto')
         self.chunk_size_mb = config.get('chunk_size_mb', 10)  # MB of text per chunk
@@ -391,7 +392,7 @@ Sammanfattning:
                     logger.error(f"All {max_retries} transcription attempts failed")
                     raise
 
-    def _summarize_chunk(self, transcript_chunk):
+    def _summarize_chunk(self, transcript_chunk, is_chunk=False):
         """Summarize a single transcript chunk"""
         logger.info(f"Summarizing chunk ({len(transcript_chunk)} characters)")
 
@@ -401,10 +402,17 @@ Sammanfattning:
 
         logger.info(f"Chunk has ~{chunk_words} words, using context_limit={context_limit}")
 
-        prompt = self.summarization_prompt_template.format(
-            max_length=self.max_summary_length // 4,  # Divide max_length among chunks
-            transcript=transcript_chunk
-        )
+        # Choose the correct prompt based on whether this is an intermediate chunk or a final summary
+        if is_chunk:
+            prompt = self.chunk_summarization_prompt_template.format(
+                transcript=transcript_chunk
+            )
+        else:
+            # This is a short, complete transcript, so use the full final-summary prompt
+            prompt = self.summarization_prompt_template.format(
+                max_length=self.max_summary_length,
+                transcript=transcript_chunk
+            )
 
         logger.info(f"Generated prompt (first 500 chars): {prompt[:500]}...")
         logger.info(f"Full prompt length: {len(prompt)} characters")
@@ -542,7 +550,8 @@ Sammanfattning:
         logger.info(f"Checking if transcript fits: {estimated_tokens} < {safe_context}")
 
         if estimated_tokens < safe_context:
-            return self._summarize_chunk(transcript)
+            # The transcript is short and not chunked, so is_chunk is False
+            return self._summarize_chunk(transcript, is_chunk=False)
 
         # For long transcripts, use chunking strategy
         logger.info("Transcript too long, using chunking strategy")
@@ -563,7 +572,8 @@ Sammanfattning:
         chunk_summaries = []
         for i, chunk in enumerate(chunks):
             try:
-                summary = self._summarize_chunk(chunk)
+                # This is an intermediate chunk, so is_chunk is True
+                summary = self._summarize_chunk(chunk, is_chunk=True)
                 chunk_summaries.append(summary)
                 logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully")
             except Exception as e:
