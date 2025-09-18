@@ -424,13 +424,12 @@ Agera som en AI-redaktör. Ditt uppdrag är att kombinera flera del-sammanfattni
 **REGLER OCH FORMAT:**
 1.  **Sammanfattning:** Skapa en enda, sammanhängande text. Använd markdown. Överskrid inte {self.max_summary_length} ord.
 2.  **Ämnesrad:** Skapa en svensk ämnesrad på 3-6 ord som fångar lektionens kärna.
-3.  **Outputformat:** Ditt svar MÅSTE följa denna mall exakt, inklusive separatorn '---'.
+3.  **Outputformat:** Ditt svar MÅSTE följa denna mall exakt, inklusive separatorn '---Subject:'.
 
 Sammanfattning:
 [Skriv den kombinerade sammanfattningen här]
 
----
-Ämnesrad:
+---Subject:
 [Skriv den svenska ämnesraden här]
 
 **Börja ditt svar nu.**
