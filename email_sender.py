@@ -259,6 +259,8 @@ class EmailSender:
         self.config = config
         self.sent_emails_file = Path("sent_emails.json")
         self.sent_emails = self._load_sent_emails()
+        self.failed_emails_file = Path("failed_emails.json")
+        self.failed_emails = self._load_failed_emails()
 
     def _load_sent_emails(self) -> Dict[str, str]:
         """Load tracking of sent emails"""
@@ -270,6 +272,25 @@ class EmailSender:
                 logger.warning("Failed to load sent emails tracking, starting fresh")
                 return {}
         return {}
+
+    def _load_failed_emails(self) -> Dict[str, Dict]:
+        """Load tracking of failed emails"""
+        if self.failed_emails_file.exists():
+            try:
+                with open(self.failed_emails_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                logger.warning("Failed to load failed emails tracking, starting fresh")
+                return {}
+        return {}
+
+    def _save_failed_emails(self):
+        """Save tracking of failed emails"""
+        try:
+            with open(self.failed_emails_file, 'w', encoding='utf-8') as f:
+                json.dump(self.failed_emails, f, indent=2)
+        except IOError as e:
+            logger.error(f"Failed to save failed emails tracking: {e}")
 
     def _extract_subject_from_summary(self, summary_content: str) -> str:
         """Extract Swedish subject line from summary content after ---Subject: delimiter"""
@@ -337,6 +358,23 @@ class EmailSender:
                 'file_path': str(summary_path)
             }
             self._save_sent_emails()
+            # Remove from failed emails if it was there
+            if file_hash in self.failed_emails:
+                del self.failed_emails[file_hash]
+                self._save_failed_emails()
+
+    def _mark_summary_failed(self, summary_path: Path, summary_name: str, error_message: str):
+        """Mark summary as failed to send"""
+        file_hash = self._get_file_hash(summary_path)
+        if file_hash:
+            self.failed_emails[file_hash] = {
+                'summary_name': summary_name,
+                'failed_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'file_path': str(summary_path),
+                'error': error_message,
+                'retry_count': self.failed_emails.get(file_hash, {}).get('retry_count', 0) + 1
+            }
+            self._save_failed_emails()
 
     def send_summary_email(self, summary_path: Path) -> bool:
         """
@@ -409,11 +447,67 @@ class EmailSender:
                 self._mark_summary_sent(summary_path, summary_name)
                 logger.info(f"Lesson summary emailed: {summary_path}")
                 return True
+            else:
+                # Email sending failed - track for later retry
+                self._mark_summary_failed(summary_path, summary_name, "Email sending failed")
+                logger.warning(f"Email sending failed, will retry later: {summary_path}")
 
         except Exception as e:
+            # Exception occurred - track for later retry
+            self._mark_summary_failed(summary_path, summary_name, str(e))
             logger.error(f"Failed to send summary email: {e}")
 
         return False
+
+    def retry_failed_emails(self) -> int:
+        """
+        Retry sending all failed emails
+
+        Returns:
+            int: Number of emails successfully sent on retry
+        """
+        if not self.failed_emails:
+            logger.info("No failed emails to retry")
+            return 0
+
+        retry_count = 0
+        to_remove = []
+
+        for file_hash, email_info in self.failed_emails.items():
+            summary_path = Path(email_info['file_path'])
+
+            # Check if file still exists
+            if not summary_path.exists():
+                logger.warning(f"Summary file no longer exists: {summary_path}")
+                to_remove.append(file_hash)
+                continue
+
+            # Check if already sent
+            if self._is_summary_sent(summary_path):
+                logger.info(f"Summary already sent, removing from failed list: {summary_path}")
+                to_remove.append(file_hash)
+                continue
+
+            try:
+                logger.info(f"Retrying failed email: {email_info['summary_name']}")
+                if self.send_summary_email(summary_path):
+                    retry_count += 1
+                    to_remove.append(file_hash)
+                    logger.info(f"Successfully resent failed email: {email_info['summary_name']}")
+                else:
+                    logger.warning(f"Retry failed again for: {email_info['summary_name']}")
+            except Exception as e:
+                logger.error(f"Retry failed with exception for {email_info['summary_name']}: {e}")
+
+        # Clean up sent or missing files
+        for file_hash in to_remove:
+            del self.failed_emails[file_hash]
+
+        if to_remove:
+            self._save_failed_emails()
+
+        logger.info(f"Successfully retried {retry_count} failed emails")
+        return retry_count
 
     def send_all_new_summaries(self, output_dir: str = "output") -> int:
         """

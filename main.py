@@ -304,33 +304,40 @@ class LessonTranscriber:
             if self.pipe is None:
                 self._load_huggingface_model()
 
-        try:
-            if self.use_standard_whisper:
-                # Using standard openai-whisper
-                result = self.whisper_model.transcribe(audio_path)
-                transcript = result["text"].strip()
-            elif hasattr(self, 'use_faster_whisper') and self.use_faster_whisper:
-                # Using faster-whisper
-                segments, info = self.whisper_model.transcribe(audio_path, beam_size=5)
-                logger.info(f"Detected language '{info.language}' with probability {info.language_probability:.2f}")
-                transcript = " ".join([segment.text for segment in segments]).strip()
-            else:
-                # Using Hugging Face pipeline - enable timestamps for long audio
-                result = self.pipe(audio_path, return_timestamps=True)
-                if isinstance(result, dict) and "text" in result:
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if self.use_standard_whisper:
+                    # Using standard openai-whisper
+                    result = self.whisper_model.transcribe(audio_path)
                     transcript = result["text"].strip()
-                elif isinstance(result, dict) and "chunks" in result:
-                    # Handle chunked transcription with timestamps
-                    transcript = " ".join([chunk.get("text", "").strip() for chunk in result["chunks"] if chunk.get("text")])
-                    transcript = transcript.strip()
+                elif hasattr(self, 'use_faster_whisper') and self.use_faster_whisper:
+                    # Using faster-whisper
+                    segments, info = self.whisper_model.transcribe(audio_path, beam_size=5)
+                    logger.info(f"Detected language '{info.language}' with probability {info.language_probability:.2f}")
+                    transcript = " ".join([segment.text for segment in segments]).strip()
                 else:
-                    transcript = str(result).strip()
+                    # Using Hugging Face pipeline - enable timestamps for long audio
+                    result = self.pipe(audio_path, return_timestamps=True)
+                    if isinstance(result, dict) and "text" in result:
+                        transcript = result["text"].strip()
+                    elif isinstance(result, dict) and "chunks" in result:
+                        # Handle chunked transcription with timestamps
+                        transcript = " ".join([chunk.get("text", "").strip() for chunk in result["chunks"] if chunk.get("text")])
+                        transcript = transcript.strip()
+                    else:
+                        transcript = str(result).strip()
 
-            logger.info(f"Transcription completed successfully ({len(transcript)} characters)")
-            return transcript
-        except Exception as e:
-            logger.error(f"Transcription failed: {e}")
-            raise
+                logger.info(f"Transcription completed successfully ({len(transcript)} characters)")
+                return transcript
+            except Exception as e:
+                logger.warning(f"Transcription attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    logger.info("GPU may be in use. Waiting 30 seconds before retry...")
+                    time.sleep(30)
+                else:
+                    logger.error(f"All {max_retries} transcription attempts failed")
+                    raise
 
     def _summarize_chunk(self, transcript_chunk):
         """Summarize a single transcript chunk"""
@@ -350,45 +357,55 @@ class LessonTranscriber:
         logger.info(f"Generated prompt (first 500 chars): {prompt[:500]}...")
         logger.info(f"Full prompt length: {len(prompt)} characters")
 
-        try:
-            request_payload = {
-                "model": self.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "num_ctx": context_limit,
-                    "temperature": 0.1,
-                    "top_p": 0.9,
-                    "repeat_penalty": 1.1
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                request_payload = {
+                    "model": self.ollama_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "num_ctx": context_limit,
+                        "temperature": 0.1,
+                        "top_p": 0.9,
+                        "repeat_penalty": 1.1
+                    }
                 }
-            }
 
-            logger.info(f"Sending request to Ollama with model: {self.ollama_model}")
+                logger.info(f"Sending request to Ollama with model: {self.ollama_model}")
 
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=request_payload,
-                timeout=900  # 15 minute timeout for large chunks
-            )
+                response = requests.post(
+                    f"{self.ollama_url}/api/generate",
+                    json=request_payload,
+                    timeout=900  # 15 minute timeout for large chunks
+                )
 
-            logger.info(f"Summarization API call completed with status: {response.status_code}")
+                logger.info(f"Summarization API call completed with status: {response.status_code}")
 
-            if response.status_code == 200:
-                result = response.json()
-                raw_response = result.get("response", "")
-                logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
-                logger.info(f"Full response length: {len(raw_response)} characters")
+                if response.status_code == 200:
+                    result = response.json()
+                    raw_response = result.get("response", "")
+                    logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
+                    logger.info(f"Full response length: {len(raw_response)} characters")
 
-                summary = raw_response.strip()
-                logger.info(f"Chunk summary completed ({len(summary)} characters)")
-                return summary
-            else:
-                logger.error(f"Ollama API error: {response.status_code} - {response.text}")
-                raise Exception(f"Ollama API returned {response.status_code}")
+                    summary = raw_response.strip()
+                    logger.info(f"Chunk summary completed ({len(summary)} characters)")
+                    return summary
+                else:
+                    logger.error(f"Ollama API error: {response.status_code} - {response.text}")
+                    raise Exception(f"Ollama API returned {response.status_code}")
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to connect to Ollama: {e}")
-            raise Exception("Cannot connect to Ollama. Make sure it's running on localhost:11434")
+            except (requests.exceptions.RequestException, Exception) as e:
+                logger.warning(f"Ollama request attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    logger.info("Ollama service may be busy. Waiting 30 seconds before retry...")
+                    time.sleep(30)
+                else:
+                    logger.error(f"All {max_retries} Ollama attempts failed")
+                    if isinstance(e, requests.exceptions.RequestException):
+                        raise Exception("Cannot connect to Ollama after retries. Make sure it's running on localhost:11434")
+                    else:
+                        raise
 
     def _combine_chunk_summaries(self, chunk_summaries):
         """Combine multiple chunk summaries into a final comprehensive summary"""
@@ -422,47 +439,54 @@ Sammanfattning:
         logger.info(f"Combined summary prompt (first 500 chars): {combined_summary_prompt[:500]}...")
         logger.info(f"Full combined prompt length: {len(combined_summary_prompt)} characters")
 
-        try:
-            request_payload = {
-                "model": self.ollama_model,
-                "prompt": combined_summary_prompt,
-                "stream": False,
-                "options": {
-                    "num_ctx": self.max_context_tokens,
-                    "temperature": 0.05,  # Even more deterministic for combining
-                    "top_p": 0.8,
-                    "repeat_penalty": 1.2
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                request_payload = {
+                    "model": self.ollama_model,
+                    "prompt": combined_summary_prompt,
+                    "stream": False,
+                    "options": {
+                        "num_ctx": self.max_context_tokens,
+                        "temperature": 0.05,  # Even more deterministic for combining
+                        "top_p": 0.8,
+                        "repeat_penalty": 1.2
+                    }
                 }
-            }
 
-            logger.info(f"Sending combined summary request to Ollama with model: {self.ollama_model}")
+                logger.info(f"Sending combined summary request to Ollama with model: {self.ollama_model}")
 
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=request_payload,
-                timeout=1200  # 20 minute timeout for final summary
-            )
+                response = requests.post(
+                    f"{self.ollama_url}/api/generate",
+                    json=request_payload,
+                    timeout=1200  # 20 minute timeout for final summary
+                )
 
-            logger.info(f"Combined summary API call completed with status: {response.status_code}")
+                logger.info(f"Combined summary API call completed with status: {response.status_code}")
 
-            if response.status_code == 200:
-                result = response.json()
-                raw_response = result.get("response", "")
-                logger.info(f"Raw combined summary response (first 500 chars): {raw_response[:500]}...")
-                logger.info(f"Full combined response length: {len(raw_response)} characters")
+                if response.status_code == 200:
+                    result = response.json()
+                    raw_response = result.get("response", "")
+                    logger.info(f"Raw combined summary response (first 500 chars): {raw_response[:500]}...")
+                    logger.info(f"Full combined response length: {len(raw_response)} characters")
 
-                final_summary = raw_response.strip()
-                logger.info(f"Final combined summary completed ({len(final_summary)} characters)")
-                return final_summary
-            else:
-                logger.error(f"Combined summary failed: {response.status_code} - {response.text}")
-                # Fallback: return concatenated individual summaries
-                return "\n\n".join(chunk_summaries)
+                    final_summary = raw_response.strip()
+                    logger.info(f"Final combined summary completed ({len(final_summary)} characters)")
+                    return final_summary
+                else:
+                    logger.error(f"Combined summary failed: {response.status_code} - {response.text}")
+                    # Fallback: return concatenated individual summaries
+                    return "\n\n".join(chunk_summaries)
 
-        except Exception as e:
-            logger.error(f"Failed to combine summaries: {e}")
-            # Fallback: return concatenated individual summaries
-            return "\n\n".join(chunk_summaries)
+            except Exception as e:
+                logger.warning(f"Combined summary attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    logger.info("Ollama service may be busy. Waiting 30 seconds before retry...")
+                    time.sleep(30)
+                else:
+                    logger.error(f"All {max_retries} combined summary attempts failed")
+                    # Fallback: return concatenated individual summaries
+                    return "\n\n".join(chunk_summaries)
 
     def generate_summary(self, transcript):
         """
@@ -707,6 +731,14 @@ Use Ctrl+C to stop monitoring.
                     logger.error(f"Error scanning audio directory: {e}")
                     time.sleep(5)
                     continue
+
+                # First, retry any previously failed emails
+                try:
+                    retry_count = email_sender.retry_failed_emails()
+                    if retry_count > 0:
+                        logger.info(f"Successfully retried {retry_count} previously failed emails")
+                except Exception as e:
+                    logger.error(f"Failed to retry previously failed emails: {e}")
 
                 new_files_processed = 0
                 for audio_path in current_audio_paths:
