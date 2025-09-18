@@ -469,8 +469,9 @@ Sammanfattning:
 
     def _combine_chunk_summaries(self, chunk_summaries):
         """Combine multiple chunk summaries into a final comprehensive summary"""
-        if len(chunk_summaries) <= 1:
-            return chunk_summaries[0] if chunk_summaries else ""
+        # Add a safety check for an empty list, but remove the special handling for a single item.
+        if not chunk_summaries:
+            return ""
 
         logger.info(f"Combining {len(chunk_summaries)} chunk summaries")
 
@@ -580,11 +581,9 @@ Sammanfattning:
                 logger.error(f"Failed to summarize chunk {i+1}: {e}")
                 chunk_summaries.append(f"[Error summarizing part {i+1}: {str(e)}]")
 
-        # Combine chunk summaries into final summary
-        if len(chunk_summaries) == 1:
-            return chunk_summaries[0]
-        else:
-            return self._combine_chunk_summaries(chunk_summaries)
+        # Always send the list of summaries to the combiner for final formatting.
+        # This ensures that even a single chunk gets the proper final prompt.
+        return self._combine_chunk_summaries(chunk_summaries)
 
     def process_lesson(self, audio_path, output_dir=None):
         """
