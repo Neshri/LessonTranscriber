@@ -292,35 +292,11 @@ class EmailSender:
         except IOError as e:
             logger.error(f"Failed to save failed emails tracking: {e}")
 
-    def _extract_subject_from_summary(self, summary_content: str) -> str:
-        """Extract Swedish subject line from summary content after ---Subject: delimiter"""
-        lines = summary_content.split('\n')
-        subject_lines = []
-
-        collecting_subject = False
-        for line in lines:
-            stripped_line = line.strip()
-            if stripped_line == '---Subject:':
-                collecting_subject = True
-                continue
-            elif collecting_subject:
-                # Collect subject lines until we hit another section or end
-                if stripped_line and not stripped_line.startswith('---'):
-                    subject_lines.append(stripped_line)
-                else:
-                    break  # Stop at next section or empty line
-
-        subject = ' '.join(subject_lines).strip()
-
-        # Fallback to default if no subject found
-        if not subject:
-            return self._generate_default_subject()
-
-        return subject
 
     def _generate_default_subject(self) -> str:
         """Generate a default Swedish subject line"""
         return "Lektionssammanfattning"
+
 
     def _save_sent_emails(self):
         """Save tracking of sent emails"""
@@ -376,7 +352,7 @@ class EmailSender:
             }
             self._save_failed_emails()
 
-    def send_summary_email(self, summary_path: Path) -> bool:
+    def send_summary_email(self, summary_path: Path, subject: str = None) -> bool:
         """
         Send a single lesson summary via email
 
@@ -403,8 +379,7 @@ class EmailSender:
             summary_content = summary_path.read_text(encoding='utf-8')
             summary_name = summary_path.stem.replace('_summary', '').replace('_', ' ').title()
 
-            # Parse subject from summary content
-            subject = self._extract_subject_from_summary(summary_content)
+            # Subject must be provided - no fallback extraction
 
             # Remove the subject delimiter and content from summary for email body
             # Extract only the summary part before ---Subject:
@@ -459,15 +434,17 @@ class EmailSender:
 
         return False
 
-    def retry_failed_emails(self) -> int:
+    def retry_failed_emails(self, transcriber) -> int:
         """
         Retry sending all failed emails
+
+        Args:
+            transcriber: LessonTranscriber instance for subject extraction
 
         Returns:
             int: Number of emails successfully sent on retry
         """
         if not self.failed_emails:
-            #logger.info("No failed emails to retry")
             return 0
 
         retry_count = 0
@@ -476,13 +453,11 @@ class EmailSender:
         for file_hash, email_info in self.failed_emails.items():
             summary_path = Path(email_info['file_path'])
 
-            # Check if file still exists
             if not summary_path.exists():
                 logger.warning(f"Summary file no longer exists: {summary_path}")
                 to_remove.append(file_hash)
                 continue
 
-            # Check if already sent
             if self._is_summary_sent(summary_path):
                 logger.info(f"Summary already sent, removing from failed list: {summary_path}")
                 to_remove.append(file_hash)
@@ -490,7 +465,12 @@ class EmailSender:
 
             try:
                 logger.info(f"Retrying failed email: {email_info['summary_name']}")
-                if self.send_summary_email(summary_path):
+
+                # Extract subject using transcriber
+                summary_content = summary_path.read_text(encoding='utf-8')
+                subject = transcriber.extract_subject_from_summary(summary_content)
+
+                if self.send_summary_email(summary_path, subject):
                     retry_count += 1
                     to_remove.append(file_hash)
                     logger.info(f"Successfully resent failed email: {email_info['summary_name']}")
@@ -499,7 +479,6 @@ class EmailSender:
             except Exception as e:
                 logger.error(f"Retry failed with exception for {email_info['summary_name']}: {e}")
 
-        # Clean up sent or missing files
         for file_hash in to_remove:
             del self.failed_emails[file_hash]
 

@@ -70,6 +70,7 @@ class LessonTranscriber:
         self.ollama_model = config['ollama_model']
         self.max_summary_length = config.get('max_summary_length', 1000)
         self.summarization_prompt_template = config['summarization_prompt_template']
+        self.combine_summaries_prompt_template = config.get('combine_summaries_prompt_template', self._get_default_combine_prompt())
         self.gpu_device = config.get('gpu_device', 'auto')
         self.chunk_size_mb = config.get('chunk_size_mb', 10)  # MB of text per chunk
         self.max_context_tokens = config.get('max_context_tokens', 3200)
@@ -104,6 +105,57 @@ class LessonTranscriber:
             raise Exception("No transcription models available. Please install faster-whisper, openai-whisper, or transformers.")
 
         logger.info("Lesson Transcriber initialized successfully")
+
+    def extract_subject_from_summary(self, summary_content: str) -> str:
+        """Extract Swedish subject line from summary content after ---Subject: delimiter"""
+        lines = summary_content.split('\n')
+        subject_lines = []
+
+        collecting_subject = False
+        for line in lines:
+            stripped_line = line.strip()
+            if stripped_line == '---Subject:':
+                collecting_subject = True
+                continue
+            elif collecting_subject:
+                # Collect subject lines until we hit another section or end
+                if stripped_line and not stripped_line.startswith('---'):
+                    subject_lines.append(stripped_line)
+                else:
+                    break  # Stop at next section or empty line
+
+        subject = ' '.join(subject_lines).strip()
+
+        # Fallback to default if no subject found
+        if not subject:
+            return self._generate_default_subject()
+
+        return subject
+
+    def _generate_default_subject(self) -> str:
+        """Generate a default Swedish subject line"""
+        return "Lektionssammanfattning"
+
+    def _get_default_combine_prompt(self):
+        """Get default combine summaries prompt if not in config"""
+        return """**ROLL OCH MÅL:**
+Agera som en AI-redaktör. Ditt uppdrag är att kombinera flera del-sammanfattningar från en lektion till ett enda, högkvalitativt slutresultat. Du ska producera både en sammanhängande sammanfattning och en kort, relevant ämnesrad.
+
+**INDATA (INDIVIDUELLA SAMMANFATTNINGAR):**
+{chunk_summaries}
+
+**REGLER OCH FORMAT:**
+1. **Sammanfattning:** Skapa en enda, sammanhängande text. Använd markdown. Överskrid inte {max_length} ord.
+2. **Ämnesrad:** Skapa en svensk ämnesrad på 3-6 ord som fångar lektionens kärna.
+3. **Outputformat:** Ditt svar MÅSTE följa denna mall exakt, inklusive separatorn '---Subject:'.
+
+Sammanfattning:
+[Skriv den kombinerade sammanfattningen här]
+
+---Subject:
+[Skriv den svenska ämnesraden här]
+
+**Börja ditt svar nu.**"""
 
     def _is_standard_whisper_model(self, model_name):
         """Check if the model name is a standard Whisper model"""
@@ -414,26 +466,11 @@ class LessonTranscriber:
 
         logger.info(f"Combining {len(chunk_summaries)} chunk summaries")
 
-        combined_summary_prompt = f"""
-**ROLL OCH MÅL:**
-Agera som en AI-redaktör. Ditt uppdrag är att kombinera flera del-sammanfattningar från en lektion till ett enda, högkvalitativt slutresultat. Du ska producera både en sammanhängande sammanfattning och en kort, relevant ämnesrad.
-
-**INDATA (INDIVIDUELLA SAMMANFATTNINGAR):**
-{"\n\n".join(f"Del {i+1}: {summary}" for i, summary in enumerate(chunk_summaries))}
-
-**REGLER OCH FORMAT:**
-1.  **Sammanfattning:** Skapa en enda, sammanhängande text. Använd markdown. Överskrid inte {self.max_summary_length} ord.
-2.  **Ämnesrad:** Skapa en svensk ämnesrad på 3-6 ord som fångar lektionens kärna.
-3.  **Outputformat:** Ditt svar MÅSTE följa denna mall exakt, inklusive separatorn '---Subject:'.
-
-Sammanfattning:
-[Skriv den kombinerade sammanfattningen här]
-
----Subject:
-[Skriv den svenska ämnesraden här]
-
-**Börja ditt svar nu.**
-"""
+        chunk_summaries_text = "\n\n".join(f"Del {i+1}: {summary}" for i, summary in enumerate(chunk_summaries))
+        combined_summary_prompt = self.combine_summaries_prompt_template.format(
+            chunk_summaries=chunk_summaries_text,
+            max_length=self.max_summary_length
+        )
 
         logger.info(f"Combined summary prompt (first 500 chars): {combined_summary_prompt[:500]}...")
         logger.info(f"Full combined prompt length: {len(combined_summary_prompt)} characters")
@@ -733,7 +770,7 @@ Use Ctrl+C to stop monitoring.
 
                 # First, retry any previously failed emails
                 try:
-                    retry_count = email_sender.retry_failed_emails()
+                    retry_count = email_sender.retry_failed_emails(transcriber)
                     if retry_count > 0:
                         logger.info(f"Successfully retried {retry_count} previously failed emails")
                 except Exception as e:
@@ -753,7 +790,12 @@ Use Ctrl+C to stop monitoring.
                                 try:
                                     email_sender = EmailSender(recipients=email_recipients)
                                     summary_path = Path(result['summary_file'])
-                                    success = email_sender.send_summary_email(summary_path)
+
+                                    # Extract subject from summary content
+                                    summary_content = summary_path.read_text(encoding='utf-8')
+                                    subject = transcriber.extract_subject_from_summary(summary_content)
+
+                                    success = email_sender.send_summary_email(summary_path, subject)
                                     if success:
                                         logger.info("Summary email sent successfully")
                                     else:
