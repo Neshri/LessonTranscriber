@@ -544,7 +544,9 @@ Sammanfattning:
         try:
             unload_payload = {
                 "model": self.ollama_model,
-                "unload": True
+                "keep_alive": 0,
+                "prompt": "",
+                "stream": False
             }
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
@@ -791,6 +793,9 @@ Use Ctrl+C to stop monitoring.
     if monitor_mode:
         logger.info("Starting monitoring mode. Checking for new files every 5 seconds...")
         processed_files = load_processed_files()
+
+        # Initialize EmailSender once, before the loop starts
+        email_sender = EmailSender(recipients=config.get('email_recipients', []))
 
         try:
             while True:
