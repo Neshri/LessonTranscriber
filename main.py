@@ -452,6 +452,7 @@ Sammanfattning:
 
                     summary = raw_response.strip()
                     logger.info(f"Chunk summary completed ({len(summary)} characters)")
+                    self._unload_ollama_model()
                     return summary
                 else:
                     logger.error(f"Ollama API error: {response.status_code} - {response.text}")
@@ -521,6 +522,7 @@ Sammanfattning:
 
                     final_summary = raw_response.strip()
                     logger.info(f"Final combined summary completed ({len(final_summary)} characters)")
+                    self._unload_ollama_model()
                     return final_summary
                 else:
                     logger.error(f"Combined summary failed: {response.status_code} - {response.text}")
@@ -536,6 +538,25 @@ Sammanfattning:
                     logger.error(f"All {max_retries} combined summary attempts failed")
                     # Fallback: return concatenated individual summaries
                     return "\n\n".join(chunk_summaries)
+
+    def _unload_ollama_model(self):
+        """Unload the Ollama model to reset computational state"""
+        try:
+            unload_payload = {
+                "model": self.ollama_model,
+                "unload": True
+            }
+            response = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json=unload_payload,
+                timeout=30
+            )
+            if response.status_code == 200:
+                logger.info(f"Successfully unloaded Ollama model: {self.ollama_model}")
+            else:
+                logger.warning(f"Failed to unload model {self.ollama_model}: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.warning(f"Error unloading Ollama model {self.ollama_model}: {e}")
 
     def generate_summary(self, transcript):
         """
