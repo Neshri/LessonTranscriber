@@ -8,7 +8,7 @@
   "max_summary_length": 3000,
   "gpu_device": "auto",
   "chunk_size_mb": 10,
-  "max_context_tokens": 8096,
+  "max_context_tokens": 4096,
   "overlap_tokens": 200,
   "email_recipients": ["anton.lundgren94@gmail.com"],
   "default_audio_source": "lesson_audio"
