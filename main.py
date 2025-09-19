@@ -446,6 +446,7 @@ Sammanfattning:
                 if response.status_code == 200:
                     result = response.json()
                     raw_response = result.get("response", "")
+                    raw_response = raw_response.replace("</end_of_turn>", "")
                     logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
                     logger.info(f"Full response length: {len(raw_response)} characters")
 
@@ -514,6 +515,7 @@ Sammanfattning:
                 if response.status_code == 200:
                     result = response.json()
                     raw_response = result.get("response", "")
+                    raw_response = raw_response.replace("</end_of_turn>", "")
                     logger.info(f"Raw combined summary response (first 500 chars): {raw_response[:500]}...")
                     logger.info(f"Full combined response length: {len(raw_response)} characters")
 
