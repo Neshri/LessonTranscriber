@@ -438,7 +438,7 @@ Sammanfattning:
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
                     json=request_payload,
-                    timeout=900  # 15 minute timeout for large chunks
+                    timeout=300  # 5 minute timeout for large chunks
                 )
 
                 logger.info(f"Summarization API call completed with status: {response.status_code}")
@@ -579,6 +579,8 @@ Sammanfattning:
                 summary = self._summarize_chunk(chunk, is_chunk=True)
                 chunk_summaries.append(summary)
                 logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully")
+                # Sleep for 2 seconds so the gpu can recover.
+                time.sleep(2)
             except Exception as e:
                 logger.error(f"Failed to summarize chunk {i+1}: {e}")
                 chunk_summaries.append(f"[Error summarizing part {i+1}: {str(e)}]")
