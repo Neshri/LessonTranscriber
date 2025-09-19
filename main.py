@@ -433,6 +433,7 @@ Sammanfattning:
                 }
 
                 logger.info(f"Sending request to Ollama with model: {self.ollama_model}")
+                logger.info(f"Full prompt to Ollama: {repr(prompt)}")
 
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
@@ -500,6 +501,7 @@ Sammanfattning:
                 }
 
                 logger.info(f"Sending combined summary request to Ollama with model: {self.ollama_model}")
+                logger.info(f"Full prompt to Ollama: {repr(combined_summary_prompt)}")
 
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
