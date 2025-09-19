@@ -433,7 +433,7 @@ Sammanfattning:
                 }
 
                 logger.info(f"Sending request to Ollama with model: {self.ollama_model}")
-                logger.info(f"Full prompt to Ollama: {repr(prompt)}")
+                logger.info(f"Prompt to Ollama: {repr(prompt)[:500]}...")
 
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
