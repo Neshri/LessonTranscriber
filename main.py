@@ -392,6 +392,33 @@ Sammanfattning:
                     logger.error(f"All {max_retries} transcription attempts failed")
                     raise
 
+    def _check_ollama_health(self):
+        """Check if Ollama service is responsive"""
+        try:
+            health_payload = {
+                "model": self.ollama_model,
+                "prompt": "test",
+                "stream": False,
+                "options": {
+                    "num_ctx": 10,
+                    "temperature": 0.0
+                }
+            }
+            response = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json=health_payload,
+                timeout=10  # Quick health check
+            )
+            if response.status_code == 200:
+                logger.info("Ollama service health check passed")
+                return True
+            else:
+                logger.warning(f"Ollama health check failed with status: {response.status_code}")
+                return False
+        except Exception as e:
+            logger.warning(f"Ollama health check failed: {e}")
+            return False
+
     def _summarize_chunk(self, transcript_chunk, is_chunk=False):
         """Summarize a single transcript chunk"""
         logger.info(f"Summarizing chunk ({len(transcript_chunk)} characters)")
@@ -401,6 +428,17 @@ Sammanfattning:
         context_limit = min(4096, chunk_words + 500)  # Context should fit content + overhead
 
         logger.info(f"Chunk has ~{chunk_words} words, using context_limit={context_limit}")
+
+        # Check Ollama health before proceeding
+        if not self._check_ollama_health():
+            logger.warning("Ollama service health check failed, attempting to continue anyway")
+
+        # Ensure GPU memory is cleared before Ollama request
+        if torch and torch.cuda.is_available():
+            logger.info("Clearing GPU cache before Ollama request")
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()  # Ensure all operations are complete
+            time.sleep(2)  # Brief pause to let memory settle
 
         # Choose the correct prompt based on whether this is an intermediate chunk or a final summary
         if is_chunk:
@@ -435,11 +473,32 @@ Sammanfattning:
                 logger.info(f"Sending request to Ollama with model: {self.ollama_model}")
                 logger.info(f"Prompt to Ollama: {repr(prompt)[:500]}...")
 
+                # Log GPU memory usage before Ollama request
+                if torch and torch.cuda.is_available():
+                    gpu_memory_before = torch.cuda.memory_allocated() / 1024**3  # GB
+                    logger.info(f"GPU memory before Ollama request: {gpu_memory_before:.2f} GB")
+
+                request_start_time = time.time()
+                logger.info(f"Ollama request started at: {time.strftime('%H:%M:%S', time.localtime(request_start_time))}")
+
+                # Use progressive timeout strategy to detect hanging vs slow requests
+                progressive_timeout = 60 + (attempt * 60)  # 1min, 2min, 3min
+                logger.info(f"Attempt {attempt + 1} with timeout: {progressive_timeout}s")
+
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
                     json=request_payload,
-                    timeout=300  # 5 minute timeout for large chunks
+                    timeout=progressive_timeout
                 )
+
+                request_end_time = time.time()
+                request_duration = request_end_time - request_start_time
+                logger.info(f"Ollama request completed in: {request_duration:.2f} seconds")
+
+                # Log GPU memory usage after Ollama request
+                if torch and torch.cuda.is_available():
+                    gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
+                    logger.info(f"GPU memory after Ollama request: {gpu_memory_after:.2f} GB")
 
                 logger.info(f"Summarization API call completed with status: {response.status_code}")
 
@@ -460,6 +519,13 @@ Sammanfattning:
 
             except (requests.exceptions.RequestException, Exception) as e:
                 logger.warning(f"Ollama request attempt {attempt + 1} failed: {e}")
+                # Log detailed error information for debugging
+                if isinstance(e, requests.exceptions.ReadTimeout):
+                    logger.error(f"Read timeout occurred after 300 seconds for chunk summarization")
+                elif isinstance(e, requests.exceptions.ConnectionError):
+                    logger.error(f"Connection error to Ollama service: {e}")
+                else:
+                    logger.error(f"Other error type: {type(e).__name__}: {e}")
                 if attempt < max_retries - 1:
                     logger.info("Ollama service may be busy. Waiting 30 seconds before retry...")
                     time.sleep(30)
@@ -487,6 +553,17 @@ Sammanfattning:
         logger.info(f"Combined summary prompt (first 500 chars): {combined_summary_prompt[:500]}...")
         logger.info(f"Full combined prompt length: {len(combined_summary_prompt)} characters")
 
+        # Check Ollama health before proceeding
+        if not self._check_ollama_health():
+            logger.warning("Ollama service health check failed for combined summary, attempting to continue anyway")
+
+        # Ensure GPU memory is cleared before combined Ollama request
+        if torch and torch.cuda.is_available():
+            logger.info("Clearing GPU cache before combined Ollama request")
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            time.sleep(2)
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -505,11 +582,32 @@ Sammanfattning:
                 logger.info(f"Sending combined summary request to Ollama with model: {self.ollama_model}")
                 logger.info(f"Full prompt to Ollama: {repr(combined_summary_prompt)}")
 
+                # Log GPU memory usage before combined Ollama request
+                if torch and torch.cuda.is_available():
+                    gpu_memory_before = torch.cuda.memory_allocated() / 1024**3  # GB
+                    logger.info(f"GPU memory before combined Ollama request: {gpu_memory_before:.2f} GB")
+
+                request_start_time = time.time()
+                logger.info(f"Combined Ollama request started at: {time.strftime('%H:%M:%S', time.localtime(request_start_time))}")
+
+                # Use progressive timeout strategy for combined summaries too
+                progressive_timeout = 120 + (attempt * 120)  # 2min, 4min, 6min
+                logger.info(f"Combined attempt {attempt + 1} with timeout: {progressive_timeout}s")
+
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
                     json=request_payload,
-                    timeout=1200  # 20 minute timeout for final summary
+                    timeout=progressive_timeout
                 )
+
+                request_end_time = time.time()
+                request_duration = request_end_time - request_start_time
+                logger.info(f"Combined Ollama request completed in: {request_duration:.2f} seconds")
+
+                # Log GPU memory usage after combined Ollama request
+                if torch and torch.cuda.is_available():
+                    gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
+                    logger.info(f"GPU memory after combined Ollama request: {gpu_memory_after:.2f} GB")
 
                 logger.info(f"Combined summary API call completed with status: {response.status_code}")
 
