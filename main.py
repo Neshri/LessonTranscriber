@@ -555,7 +555,7 @@ Sammanfattning:
                 logger.info(f"Ollama request started at: {time.strftime('%H:%M:%S', time.localtime(request_start_time))}")
 
                 # Use progressive timeout strategy to detect hanging vs slow requests
-                progressive_timeout = 60 + (attempt * 60)  # 1min, 2min, 3min
+                progressive_timeout = 120 + (attempt * 120)  # 2min, 4min, 6min (for ~2min chunks)
                 logger.info(f"Attempt {attempt + 1} with timeout: {progressive_timeout}s")
 
                 response = requests.post(
@@ -572,15 +572,16 @@ Sammanfattning:
                     raw_response = ""
                     for line in response.iter_lines():
                         if line:
-                            line = line.decode('utf-8')
-                            if line.startswith('data: '):
+                            line = line.decode('utf-8').strip()
+                            if line:  # Skip empty lines
                                 try:
-                                    data = json.loads(line[6:])  # Remove 'data: ' prefix
+                                    data = json.loads(line)
                                     if 'response' in data:
                                         raw_response += data['response']
                                     if data.get('done', False):
                                         break
                                 except json.JSONDecodeError:
+                                    logger.debug(f"Skipping non-JSON line: {line[:100]}...")
                                     continue
 
                     raw_response = raw_response.replace("</end_of_turn>", "")
@@ -698,8 +699,8 @@ Sammanfattning:
                 request_start_time = time.time()
                 logger.info(f"Combined Ollama request started at: {time.strftime('%H:%M:%S', time.localtime(request_start_time))}")
 
-                # Use progressive timeout strategy for combined summaries too
-                progressive_timeout = 120 + (attempt * 120)  # 2min, 4min, 6min
+                # Use progressive timeout strategy for combined summaries too (longer for final summary)
+                progressive_timeout = 180 + (attempt * 180)  # 3min, 6min, 9min
                 logger.info(f"Combined attempt {attempt + 1} with timeout: {progressive_timeout}s")
 
                 response = requests.post(
@@ -716,15 +717,16 @@ Sammanfattning:
                     raw_response = ""
                     for line in response.iter_lines():
                         if line:
-                            line = line.decode('utf-8')
-                            if line.startswith('data: '):
+                            line = line.decode('utf-8').strip()
+                            if line:  # Skip empty lines
                                 try:
-                                    data = json.loads(line[6:])  # Remove 'data: ' prefix
+                                    data = json.loads(line)
                                     if 'response' in data:
                                         raw_response += data['response']
                                     if data.get('done', False):
                                         break
                                 except json.JSONDecodeError:
+                                    logger.debug(f"Skipping non-JSON line: {line[:100]}...")
                                     continue
 
                     raw_response = raw_response.replace("</end_of_turn>", "")
