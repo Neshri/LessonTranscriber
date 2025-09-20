@@ -68,6 +68,8 @@ class LessonTranscriber:
         self.whisper_model_name = config['whisper_model']
         self.ollama_url = config['ollama_url']
         self.ollama_model = config['ollama_model']
+        # Use main model for all summarization tasks
+        self.chunk_model = self.ollama_model
         self.max_summary_length = config.get('max_summary_length', 1000)
         self.summarization_prompt_template = config['summarization_prompt_template']
         self.chunk_summarization_prompt_template = config.get('chunk_summarization_prompt_template', 'Summarize the key points of this text: {transcript}')
@@ -417,8 +419,7 @@ Sammanfattning:
                 return False
         except Exception as e:
             logger.warning(f"Ollama health check failed: {e}")
-            # Try to restart Ollama if health check fails
-            self._restart_ollama_service()
+            # Don't restart automatically - health check may be interfering
             return False
 
     def _restart_ollama_service(self):
@@ -491,9 +492,15 @@ Sammanfattning:
 
         logger.info(f"Chunk has ~{chunk_words} words, using context_limit={context_limit}")
 
-        # Check Ollama health before proceeding
-        if not self._check_ollama_health():
-            logger.warning("Ollama service health check failed, attempting to continue anyway")
+        # Simple connection test to ensure Ollama is reachable
+        try:
+            test_response = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
+            if test_response.status_code == 200:
+                logger.info("Ollama service connection test passed")
+            else:
+                logger.warning(f"Ollama connection test returned status {test_response.status_code}")
+        except Exception as e:
+            logger.warning(f"Ollama connection test failed: {e}")
 
         # Ensure GPU memory is cleared before Ollama request
         if torch and torch.cuda.is_available():
@@ -520,10 +527,14 @@ Sammanfattning:
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # Use chunk-specific model if configured, otherwise use main model
+                model_to_use = self.chunk_model if is_chunk else self.ollama_model
+                logger.info(f"Using model: {model_to_use} for {'chunk' if is_chunk else 'final'} summarization")
+
                 request_payload = {
-                    "model": self.ollama_model,
+                    "model": model_to_use,
                     "prompt": prompt,
-                    "stream": False,
+                    "stream": True,
                     "options": {
                         "num_ctx": context_limit,
                         "temperature": 0.1,
@@ -550,30 +561,48 @@ Sammanfattning:
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
                     json=request_payload,
-                    timeout=progressive_timeout
+                    timeout=progressive_timeout,
+                    stream=True
                 )
 
-                request_end_time = time.time()
-                request_duration = request_end_time - request_start_time
-                logger.info(f"Ollama request completed in: {request_duration:.2f} seconds")
-
-                # Log GPU memory usage after Ollama request
-                if torch and torch.cuda.is_available():
-                    gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
-                    logger.info(f"GPU memory after Ollama request: {gpu_memory_after:.2f} GB")
-
-                logger.info(f"Summarization API call completed with status: {response.status_code}")
+                logger.info(f"Summarization API call started with status: {response.status_code}")
 
                 if response.status_code == 200:
-                    result = response.json()
-                    raw_response = result.get("response", "")
+                    # Handle streaming response
+                    raw_response = ""
+                    for line in response.iter_lines():
+                        if line:
+                            line = line.decode('utf-8')
+                            if line.startswith('data: '):
+                                try:
+                                    data = json.loads(line[6:])  # Remove 'data: ' prefix
+                                    if 'response' in data:
+                                        raw_response += data['response']
+                                    if data.get('done', False):
+                                        break
+                                except json.JSONDecodeError:
+                                    continue
+
                     raw_response = raw_response.replace("</end_of_turn>", "")
                     logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
                     logger.info(f"Full response length: {len(raw_response)} characters")
 
+                    request_end_time = time.time()
+                    request_duration = request_end_time - request_start_time
+                    logger.info(f"Ollama request completed in: {request_duration:.2f} seconds")
+
+                    # Log GPU memory usage after Ollama request
+                    if torch and torch.cuda.is_available():
+                        gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
+                        logger.info(f"GPU memory after Ollama request: {gpu_memory_after:.2f} GB")
+
                     summary = raw_response.strip()
                     logger.info(f"Chunk summary completed ({len(summary)} characters)")
-                    self._unload_ollama_model()
+                    # Only unload if using a different model for chunks
+                    if is_chunk and self.chunk_model != self.ollama_model:
+                        self._unload_ollama_model(model=self.chunk_model)
+                    else:
+                        self._unload_ollama_model()
                     return summary
                 else:
                     logger.error(f"Ollama API error: {response.status_code} - {response.text}")
@@ -626,9 +655,15 @@ Sammanfattning:
         logger.info(f"Combined summary prompt (first 500 chars): {combined_summary_prompt[:500]}...")
         logger.info(f"Full combined prompt length: {len(combined_summary_prompt)} characters")
 
-        # Check Ollama health before proceeding
-        if not self._check_ollama_health():
-            logger.warning("Ollama service health check failed for combined summary, attempting to continue anyway")
+        # Simple connection test to ensure Ollama is reachable
+        try:
+            test_response = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
+            if test_response.status_code == 200:
+                logger.info("Ollama service connection test passed for combined summary")
+            else:
+                logger.warning(f"Ollama connection test returned status {test_response.status_code} for combined summary")
+        except Exception as e:
+            logger.warning(f"Ollama connection test failed for combined summary: {e}")
 
         # Ensure GPU memory is cleared before combined Ollama request
         if torch and torch.cuda.is_available():
@@ -643,7 +678,7 @@ Sammanfattning:
                 request_payload = {
                     "model": self.ollama_model,
                     "prompt": combined_summary_prompt,
-                    "stream": False,
+                    "stream": True,
                     "options": {
                         "num_ctx": self.max_context_tokens,
                         "temperature": 0.05,  # Even more deterministic for combining
@@ -670,26 +705,40 @@ Sammanfattning:
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
                     json=request_payload,
-                    timeout=progressive_timeout
+                    timeout=progressive_timeout,
+                    stream=True
                 )
 
-                request_end_time = time.time()
-                request_duration = request_end_time - request_start_time
-                logger.info(f"Combined Ollama request completed in: {request_duration:.2f} seconds")
-
-                # Log GPU memory usage after combined Ollama request
-                if torch and torch.cuda.is_available():
-                    gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
-                    logger.info(f"GPU memory after combined Ollama request: {gpu_memory_after:.2f} GB")
-
-                logger.info(f"Combined summary API call completed with status: {response.status_code}")
+                logger.info(f"Combined summary API call started with status: {response.status_code}")
 
                 if response.status_code == 200:
-                    result = response.json()
-                    raw_response = result.get("response", "")
+                    # Handle streaming response
+                    raw_response = ""
+                    for line in response.iter_lines():
+                        if line:
+                            line = line.decode('utf-8')
+                            if line.startswith('data: '):
+                                try:
+                                    data = json.loads(line[6:])  # Remove 'data: ' prefix
+                                    if 'response' in data:
+                                        raw_response += data['response']
+                                    if data.get('done', False):
+                                        break
+                                except json.JSONDecodeError:
+                                    continue
+
                     raw_response = raw_response.replace("</end_of_turn>", "")
                     logger.info(f"Raw combined summary response (first 500 chars): {raw_response[:500]}...")
                     logger.info(f"Full combined response length: {len(raw_response)} characters")
+
+                    request_end_time = time.time()
+                    request_duration = request_end_time - request_start_time
+                    logger.info(f"Combined Ollama request completed in: {request_duration:.2f} seconds")
+
+                    # Log GPU memory usage after combined Ollama request
+                    if torch and torch.cuda.is_available():
+                        gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
+                        logger.info(f"GPU memory after combined Ollama request: {gpu_memory_after:.2f} GB")
 
                     final_summary = raw_response.strip()
                     logger.info(f"Final combined summary completed ({len(final_summary)} characters)")
@@ -719,11 +768,12 @@ Sammanfattning:
                     # Fallback: return concatenated individual summaries
                     return "\n\n".join(chunk_summaries)
 
-    def _unload_ollama_model(self):
+    def _unload_ollama_model(self, model=None):
         """Unload the Ollama model to reset computational state"""
+        model_to_unload = model or self.ollama_model
         try:
             unload_payload = {
-                "model": self.ollama_model,
+                "model": model_to_unload,
                 "keep_alive": 0,
                 "prompt": "",
                 "stream": False
@@ -738,15 +788,11 @@ Sammanfattning:
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
                 time.sleep(5)  # Increased delay
-                logger.info(f"Successfully unloaded Ollama model and emptied GPU cache: {self.ollama_model}")
+                logger.info(f"Successfully unloaded Ollama model and emptied GPU cache: {model_to_unload}")
             else:
-                logger.warning(f"Failed to unload model {self.ollama_model}: {response.status_code} - {response.text}")
-                # If unload fails, try to restart Ollama service
-                self._restart_ollama_service()
+                logger.warning(f"Failed to unload model {model_to_unload}: {response.status_code} - {response.text}")
         except Exception as e:
-            logger.warning(f"Error unloading Ollama model {self.ollama_model}: {e}")
-            # If unload fails, try to restart Ollama service
-            self._restart_ollama_service()
+            logger.warning(f"Error unloading Ollama model {model_to_unload}: {e}")
 
     def generate_summary(self, transcript):
         """
@@ -788,14 +834,26 @@ Sammanfattning:
         chunk_summaries = []
         for i, chunk in enumerate(chunks):
             try:
+                logger.info(f"Starting chunk {i+1}/{len(chunks)} (length: {len(chunk)} characters)")
                 # This is an intermediate chunk, so is_chunk is True
                 summary = self._summarize_chunk(chunk, is_chunk=True)
                 chunk_summaries.append(summary)
-                logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully")
-                # Sleep for 2 seconds so the gpu can recover.
-                time.sleep(2)
+                logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully (summary length: {len(summary)})")
+                # Longer sleep between chunks to let Ollama recover fully
+                logger.info(f"Waiting 15 seconds before processing next chunk...")
+                time.sleep(15)
+
+                # Force model unload and reload between chunks to prevent state accumulation
+                if i < len(chunks) - 1:  # Don't do this after the last chunk
+                    logger.info("Reloading Ollama model to ensure clean state for next chunk")
+                    try:
+                        self._unload_ollama_model()
+                        time.sleep(5)  # Wait for unload to complete
+                        # Note: We don't reload immediately, let it happen naturally on next request
+                    except Exception as e:
+                        logger.warning(f"Error during model reload: {e}")
             except Exception as e:
-                logger.error(f"Failed to summarize chunk {i+1}: {e}")
+                logger.error(f"Failed to summarize chunk {i+1} (length: {len(chunk)}): {e}")
                 chunk_summaries.append(f"[Error summarizing part {i+1}: {str(e)}]")
 
         # Always send the list of summaries to the combiner for final formatting.
