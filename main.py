@@ -638,6 +638,7 @@ Sammanfattning:
                 self.pipe = None
             if torch and torch.cuda.is_available():
                 torch.cuda.empty_cache()
+                time.sleep(3)
                 logger.info("Whisper model unloaded and GPU cache cleared")
 
             # Generate summary
