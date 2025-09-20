@@ -554,7 +554,9 @@ Sammanfattning:
                 timeout=30
             )
             if response.status_code == 200:
-                logger.info(f"Successfully unloaded Ollama model: {self.ollama_model}")
+                torch.cuda.empty_cache()
+                time.sleep(3)
+                logger.info(f"Successfully unloaded Ollama model and emptied GPU cache: {self.ollama_model}")
             else:
                 logger.warning(f"Failed to unload model {self.ollama_model}: {response.status_code} - {response.text}")
         except Exception as e:
