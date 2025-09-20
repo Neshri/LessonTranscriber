@@ -72,7 +72,7 @@ class LessonTranscriber:
         self.chunk_model = self.ollama_model
         self.max_summary_length = config.get('max_summary_length', 1000)
         self.summarization_prompt_template = config['summarization_prompt_template']
-        self.chunk_summarization_prompt_template = config.get('chunk_summarization_prompt_template', 'Summarize the key points of this text: {transcript}')
+        self.chunk_summarization_prompt_template = config.get('chunk_summarization_prompt_template', 'Följande är ett utdrag från en längre lektionstranskription. Sammanfatta de viktigaste punkterna på MAX 200 ord. Var mycket koncist och använd enkel prosa utan rubriker eller specialformatering. Transkription:\n{transcript}')
         self.combine_summaries_prompt_template = config.get('combine_summaries_prompt_template', self._get_default_combine_prompt())
         self.gpu_device = config.get('gpu_device', 'auto')
         self.chunk_size_mb = config.get('chunk_size_mb', 10)  # MB of text per chunk
@@ -584,10 +584,22 @@ Sammanfattning:
                                     last_chunk_time = current_time
 
                                     if 'response' in data:
-                                        raw_response += data['response']
-                                        # Log progress every 10 chunks or when response gets long
-                                        if chunk_count % 10 == 0 or len(raw_response) > len(raw_response) - 100:
+                                        chunk_text = data['response']
+                                        raw_response += chunk_text
+
+                                        # Log the actual streaming content every 50 chunks
+                                        if chunk_count % 50 == 0:
+                                            logger.info(f"Streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
+                                            logger.info(f"Chunk {chunk_count}, total length: {len(raw_response)}")
+
+                                        # Log progress every 10 chunks
+                                        elif chunk_count % 10 == 0:
                                             logger.info(f"Received chunk {chunk_count}, response length: {len(raw_response)}")
+                
+                                        # Safety check: break if response gets too long (likely model not following concise instructions)
+                                        if len(raw_response) > 10000:  # 10k chars is way too long for a summary
+                                            logger.warning(f"Response too long ({len(raw_response)} chars), breaking early to save time")
+                                            break
 
                                     if data.get('done', False):
                                         logger.info(f"Streaming completed with {chunk_count} chunks")
@@ -750,10 +762,22 @@ Sammanfattning:
                                     last_chunk_time = current_time
 
                                     if 'response' in data:
-                                        raw_response += data['response']
-                                        # Log progress every 10 chunks or when response gets long
-                                        if chunk_count % 10 == 0 or len(raw_response) > len(raw_response) - 100:
+                                        chunk_text = data['response']
+                                        raw_response += chunk_text
+
+                                        # Log the actual streaming content every 50 chunks
+                                        if chunk_count % 50 == 0:
+                                            logger.info(f"Combined streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
+                                            logger.info(f"Combined chunk {chunk_count}, total length: {len(raw_response)}")
+
+                                        # Log progress every 10 chunks
+                                        elif chunk_count % 10 == 0:
                                             logger.info(f"Combined: Received chunk {chunk_count}, response length: {len(raw_response)}")
+
+                                        # Safety check: break if response gets too long
+                                        if len(raw_response) > 10000:  # 10k chars is way too long for a summary
+                                            logger.warning(f"Combined: Response too long ({len(raw_response)} chars), breaking early")
+                                            break
 
                                     if data.get('done', False):
                                         logger.info(f"Combined streaming completed with {chunk_count} chunks")
