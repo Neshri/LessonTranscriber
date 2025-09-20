@@ -1,6 +1,6 @@
 {
   "whisper_model": "KBLab/kb-whisper-large",
-  "ollama_model": "gemma3:27b-it-qat",
+  "ollama_model": "gemma3-multi-gpu",
   "ollama_url": "http://127.0.0.1:11434",
   "summarization_prompt_template": "Du kommer att få en transkription av en lektion. Din enda uppgift är att producera en koncis sammanfattning och en ämnesrad baserat på texten.\n\n**INSTRUKTIONER:**\n1.  **Sammanfattning:** Skapa en tydlig sammanfattning av lektionens kärninnehåll. Använd markdown-formatering. Inkludera en huvudrubrik, en kort inledande paragraf, och avsluta med en punktlista över de viktigaste punkterna. Överskrid inte {max_length} ord.\n2.  **Ämnesrad:** Skapa en kort, beskrivande svensk ämnesrad (3-6 ord).\n3.  **INGA ÅSIKTER:** Generera absolut inga personliga åsikter, kommentarer eller utvärderingar av transkriptionen. Svara ENDAST med den färdiga produkten i det specificerade formatet.\n\n**KÄLLTEXT (TRANSKRIPTION):**\n{transcript}\n\n**OBLIGATORISKT SVARSFORMAT:**\n\nSammanfattning:\n[Skriv den färdiga sammanfattningen här]\n\n---Subject:\n[Skriv den svenska ämnesraden här]",
   "chunk_summarization_prompt_template": "Följande är ett utdrag från en längre lektionstranskription. Sammanfatta de viktigaste punkterna, nyckelinformationen och slutsatserna i detta textstycke på ett koncist sätt. Producera enbart en ren text-sammanfattning utan rubriker eller speciella format. Transkription:\n{transcript}",
