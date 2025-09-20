@@ -570,19 +570,40 @@ Sammanfattning:
                 if response.status_code == 200:
                     # Handle streaming response
                     raw_response = ""
+                    chunk_count = 0
+                    last_chunk_time = time.time()
+
                     for line in response.iter_lines():
+                        current_time = time.time()
                         if line:
                             line = line.decode('utf-8').strip()
                             if line:  # Skip empty lines
                                 try:
                                     data = json.loads(line)
+                                    chunk_count += 1
+                                    last_chunk_time = current_time
+
                                     if 'response' in data:
                                         raw_response += data['response']
+                                        # Log progress every 10 chunks or when response gets long
+                                        if chunk_count % 10 == 0 or len(raw_response) > len(raw_response) - 100:
+                                            logger.info(f"Received chunk {chunk_count}, response length: {len(raw_response)}")
+
                                     if data.get('done', False):
+                                        logger.info(f"Streaming completed with {chunk_count} chunks")
                                         break
+
                                 except json.JSONDecodeError:
                                     logger.debug(f"Skipping non-JSON line: {line[:100]}...")
                                     continue
+
+                        # Check for long periods without data (potential hang)
+                        time_since_last_chunk = current_time - last_chunk_time
+                        if time_since_last_chunk > 30:  # 30 seconds without data
+                            logger.warning(f"No streaming data received for {time_since_last_chunk:.1f} seconds")
+                            if time_since_last_chunk > 60:  # 1 minute without data
+                                logger.error("Streaming appears to have stopped - breaking out")
+                                break
 
                     raw_response = raw_response.replace("</end_of_turn>", "")
                     logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
@@ -715,19 +736,40 @@ Sammanfattning:
                 if response.status_code == 200:
                     # Handle streaming response
                     raw_response = ""
+                    chunk_count = 0
+                    last_chunk_time = time.time()
+
                     for line in response.iter_lines():
+                        current_time = time.time()
                         if line:
                             line = line.decode('utf-8').strip()
                             if line:  # Skip empty lines
                                 try:
                                     data = json.loads(line)
+                                    chunk_count += 1
+                                    last_chunk_time = current_time
+
                                     if 'response' in data:
                                         raw_response += data['response']
+                                        # Log progress every 10 chunks or when response gets long
+                                        if chunk_count % 10 == 0 or len(raw_response) > len(raw_response) - 100:
+                                            logger.info(f"Combined: Received chunk {chunk_count}, response length: {len(raw_response)}")
+
                                     if data.get('done', False):
+                                        logger.info(f"Combined streaming completed with {chunk_count} chunks")
                                         break
+
                                 except json.JSONDecodeError:
-                                    logger.debug(f"Skipping non-JSON line: {line[:100]}...")
+                                    logger.debug(f"Combined: Skipping non-JSON line: {line[:100]}...")
                                     continue
+
+                        # Check for long periods without data (potential hang)
+                        time_since_last_chunk = current_time - last_chunk_time
+                        if time_since_last_chunk > 30:  # 30 seconds without data
+                            logger.warning(f"Combined: No streaming data received for {time_since_last_chunk:.1f} seconds")
+                            if time_since_last_chunk > 60:  # 1 minute without data
+                                logger.error("Combined: Streaming appears to have stopped - breaking out")
+                                break
 
                     raw_response = raw_response.replace("</end_of_turn>", "")
                     logger.info(f"Raw combined summary response (first 500 chars): {raw_response[:500]}...")
