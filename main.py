@@ -9,7 +9,7 @@ import os
 import requests
 import json
 import time
-import datetime
+from datetime import datetime
 import hashlib
 import argparse
 from pathlib import Path
@@ -945,9 +945,15 @@ Sammanfattning:
                 # This ensures that even a single chunk gets the proper final prompt.
                 final_summary = self._combine_chunk_summaries(chunk_summaries)
 
-        # Prepend timestamp if provided
+        # Add timestamp to JSON response if provided
         if audio_timestamp:
-            final_summary = f"Audio file creation timestamp: {audio_timestamp}\n\n{final_summary}"
+            try:
+                summary_dict = json.loads(final_summary)
+                summary_dict["timestamp"] = audio_timestamp
+                final_summary = json.dumps(summary_dict, ensure_ascii=False, indent=2)
+            except json.JSONDecodeError:
+                # Fallback if not JSON, prepend as text
+                final_summary = f"Audio file creation timestamp: {audio_timestamp}\n\n{final_summary}"
 
         return final_summary
 
