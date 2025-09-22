@@ -952,8 +952,13 @@ Sammanfattning:
                 summary_dict["timestamp"] = audio_timestamp
                 final_summary = json.dumps(summary_dict, ensure_ascii=False, indent=2)
             except json.JSONDecodeError:
-                # Fallback if not JSON, prepend as text
-                final_summary = f"Audio file creation timestamp: {audio_timestamp}\n\n{final_summary}"
+                # Fallback: create JSON with the response as summary
+                summary_dict = {
+                    "subject": "Lektionssammanfattning",
+                    "summary": final_summary,
+                    "timestamp": audio_timestamp
+                }
+                final_summary = json.dumps(summary_dict, ensure_ascii=False, indent=2)
 
         return final_summary
 
