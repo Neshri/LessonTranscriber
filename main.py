@@ -136,12 +136,11 @@ class LessonTranscriber:
             return {'subject': subject, 'summary': summary}
 
         except json.JSONDecodeError as e:
-            logger.error(f"FATAL: Failed to decode JSON from LLM. Error: {e}")
-            logger.error(f"LLM Raw Output that caused the error:\n---\n{llm_content}\n---")
-            # Fallback: return the raw content as the summary to prevent a crash
+            logger.warning(f"LLM returned invalid JSON, treating as plain text summary. Error: {e}")
+            # Treat the raw content as plain text summary
             return {
                 'subject': self._generate_default_subject(),
-                'summary': f"[JSON PARSING FAILED] Raw model output:\n{llm_content.strip()}"
+                'summary': llm_content.strip()
             }
 
         
