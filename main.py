@@ -120,6 +120,12 @@ class LessonTranscriber:
         Parses the raw LLM output, expecting a JSON object.
         Returns a dictionary with 'subject' and 'summary' keys.
         """
+        if not isinstance(llm_content, str):
+            return {
+                'subject': self._generate_default_subject(),
+                'summary': str(llm_content)
+            }
+
         try:
             # The model sometimes wraps the JSON in markdown code fences. Remove them.
             if llm_content.strip().startswith("```json"):
@@ -135,8 +141,9 @@ class LessonTranscriber:
 
             return {'subject': subject, 'summary': summary}
 
-        except json.JSONDecodeError as e:
-            logger.warning(f"LLM returned invalid JSON, treating as plain text summary. Error: {e}")
+        except Exception as e:
+            logger.warning(f"LLM output parsing failed: {e}, treating as plain text")
+            logger.info(f"Raw LLM content that failed parsing: {repr(llm_content)}")
             # Treat the raw content as plain text summary
             return {
                 'subject': self._generate_default_subject(),
@@ -622,6 +629,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                     raw_response = raw_response.replace("</end_of_turn>", "")
                     logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
                     logger.info(f"Full response length: {len(raw_response)} characters")
+                    logger.info(f"Raw LLM response: {repr(raw_response)}")
 
                     request_end_time = time.time()
                     request_duration = request_end_time - request_start_time
