@@ -575,6 +575,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 )
 
                 logger.info(f"Summarization API call started with status: {response.status_code}")
+                logger.info(f"Response content preview: {response.text[:500]}")
 
                 if response.status_code == 200:
                     # Handle streaming response
@@ -963,9 +964,11 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
             # Step 1: Get the raw JSON string from the LLM
             raw_llm_output = self.generate_summary(transcript)
+            logger.info(f"Raw LLM output from generate_summary: {repr(raw_llm_output)}")
 
             # Step 2: Parse the raw string into a clean Python dictionary
             parsed_data = self._parse_llm_output(raw_llm_output)
+            logger.info(f"Parsed data: {parsed_data}")
             subject = parsed_data['subject']
             summary_content = parsed_data['summary']
 
