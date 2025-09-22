@@ -9,6 +9,7 @@ import os
 import requests
 import json
 import time
+import datetime
 import hashlib
 import argparse
 from pathlib import Path
@@ -110,7 +111,23 @@ class LessonTranscriber:
         logger.info("Lesson Transcriber initialized successfully")
 
     def extract_subject_from_summary(self, summary_content: str) -> str:
-        """Extract Swedish subject line from summary content after ---Subject: delimiter (case insensitive)"""
+        """Extract Swedish subject line from summary content, handling both JSON and plain text formats"""
+        # Try to parse as JSON first
+        try:
+            parsed = json.loads(summary_content.strip())
+            if isinstance(parsed, dict) and 'subject' in parsed:
+                subject = parsed['subject'].strip()
+                if subject:
+                    return subject
+                else:
+                    logger.warning("JSON subject is empty, using default")
+                    return self._generate_default_subject()
+            else:
+                logger.warning("JSON does not contain 'subject' key, falling back to text parsing")
+        except json.JSONDecodeError as e:
+            logger.debug(f"Summary content is not valid JSON: {e}. Falling back to text parsing")
+
+        # Fallback to plain text parsing for backward compatibility
         lines = summary_content.split('\n')
         subject_lines = []
 
@@ -862,7 +879,7 @@ Sammanfattning:
         except Exception as e:
             logger.warning(f"Error unloading Ollama model {model_to_unload}: {e}")
 
-    def generate_summary(self, transcript):
+    def generate_summary(self, transcript, audio_timestamp=None):
         """
         Generate a summary of the transcript using Ollama
         """
@@ -881,52 +898,58 @@ Sammanfattning:
 
         if estimated_tokens < safe_context:
             # The transcript is short and not chunked, so is_chunk is False
-            return self._summarize_chunk(transcript, is_chunk=False)
+            final_summary = self._summarize_chunk(transcript, is_chunk=False)
+        else:
+            # For long transcripts, use chunking strategy
+            logger.info("Transcript too long, using chunking strategy")
 
-        # For long transcripts, use chunking strategy
-        logger.info("Transcript too long, using chunking strategy")
+            # Split into chunks
+            chunks = self._split_text_into_chunks(
+                transcript,
+                max_tokens=self.max_context_tokens - 1000,  # Leave room for prompt
+                overlap_tokens=self.overlap_tokens
+            )
 
-        # Split into chunks
-        chunks = self._split_text_into_chunks(
-            transcript,
-            max_tokens=self.max_context_tokens - 1000,  # Leave room for prompt
-            overlap_tokens=self.overlap_tokens
-        )
+            logger.info(f"Split transcript into {len(chunks)} chunks")
 
-        logger.info(f"Split transcript into {len(chunks)} chunks")
-
-        if not chunks:
-            return "Unable to process transcript - no valid content found"
-
-        # Summarize each chunk
-        chunk_summaries = []
-        for i, chunk in enumerate(chunks):
-            try:
-                logger.info(f"Starting chunk {i+1}/{len(chunks)} (length: {len(chunk)} characters)")
-                # This is an intermediate chunk, so is_chunk is True
-                summary = self._summarize_chunk(chunk, is_chunk=True)
-                chunk_summaries.append(summary)
-                logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully (summary length: {len(summary)})")
-                # Longer sleep between chunks to let Ollama recover fully
-                logger.info(f"Waiting 15 seconds before processing next chunk...")
-                time.sleep(15)
-
-                # Force model unload and reload between chunks to prevent state accumulation
-                if i < len(chunks) - 1:  # Don't do this after the last chunk
-                    logger.info("Reloading Ollama model to ensure clean state for next chunk")
+            if not chunks:
+                final_summary = "Unable to process transcript - no valid content found"
+            else:
+                # Summarize each chunk
+                chunk_summaries = []
+                for i, chunk in enumerate(chunks):
                     try:
-                        self._unload_ollama_model()
-                        time.sleep(5)  # Wait for unload to complete
-                        # Note: We don't reload immediately, let it happen naturally on next request
-                    except Exception as e:
-                        logger.warning(f"Error during model reload: {e}")
-            except Exception as e:
-                logger.error(f"Failed to summarize chunk {i+1} (length: {len(chunk)}): {e}")
-                chunk_summaries.append(f"[Error summarizing part {i+1}: {str(e)}]")
+                        logger.info(f"Starting chunk {i+1}/{len(chunks)} (length: {len(chunk)} characters)")
+                        # This is an intermediate chunk, so is_chunk is True
+                        summary = self._summarize_chunk(chunk, is_chunk=True)
+                        chunk_summaries.append(summary)
+                        logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully (summary length: {len(summary)})")
+                        # Longer sleep between chunks to let Ollama recover fully
+                        logger.info(f"Waiting 15 seconds before processing next chunk...")
+                        time.sleep(15)
 
-        # Always send the list of summaries to the combiner for final formatting.
-        # This ensures that even a single chunk gets the proper final prompt.
-        return self._combine_chunk_summaries(chunk_summaries)
+                        # Force model unload and reload between chunks to prevent state accumulation
+                        if i < len(chunks) - 1:  # Don't do this after the last chunk
+                            logger.info("Reloading Ollama model to ensure clean state for next chunk")
+                            try:
+                                self._unload_ollama_model()
+                                time.sleep(5)  # Wait for unload to complete
+                                # Note: We don't reload immediately, let it happen naturally on next request
+                            except Exception as e:
+                                logger.warning(f"Error during model reload: {e}")
+                    except Exception as e:
+                        logger.error(f"Failed to summarize chunk {i+1} (length: {len(chunk)}): {e}")
+                        chunk_summaries.append(f"[Error summarizing part {i+1}: {str(e)}]")
+
+                # Always send the list of summaries to the combiner for final formatting.
+                # This ensures that even a single chunk gets the proper final prompt.
+                final_summary = self._combine_chunk_summaries(chunk_summaries)
+
+        # Prepend timestamp if provided
+        if audio_timestamp:
+            final_summary = f"Audio file creation timestamp: {audio_timestamp}\n\n{final_summary}"
+
+        return final_summary
 
     def process_lesson(self, audio_path, output_dir=None):
         """
@@ -955,8 +978,12 @@ Sammanfattning:
                 time.sleep(3)
                 logger.info("Whisper model unloaded and GPU cache cleared")
 
+            # Get audio file creation timestamp
+            audio_creation_time = os.path.getctime(audio_path)
+            formatted_timestamp = datetime.fromtimestamp(audio_creation_time).isoformat()
+
             # Generate summary
-            summary = self.generate_summary(transcript)
+            summary = self.generate_summary(transcript, formatted_timestamp)
 
             # Prepare output
             base_name = Path(audio_path).stem

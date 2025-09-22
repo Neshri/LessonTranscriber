@@ -297,6 +297,30 @@ class EmailSender:
         """Generate a default Swedish subject line"""
         return "Lektionssammanfattning"
 
+    def _extract_subject_from_plain_text(self, content: str) -> str:
+        """Extract subject from plain text summary content"""
+        lines = content.split('\n')
+        in_subject = False
+        subject_lines = []
+        for line in lines:
+            if line.strip() == '---Subject:':
+                in_subject = True
+                continue
+            if in_subject:
+                subject_lines.append(line)
+        subject = '\n'.join(subject_lines).strip()
+        return subject if subject else self._generate_default_subject()
+
+    def _get_cleaned_summary(self, content: str) -> str:
+        """Extract summary body from plain text content, removing subject section"""
+        summary_lines = content.split('\n')
+        summary_only = []
+        for line in summary_lines:
+            if line.strip() == '---Subject:':
+                break
+            summary_only.append(line)
+        return '\n'.join(summary_only).strip()
+
 
     def _save_sent_emails(self):
         """Save tracking of sent emails"""
@@ -379,23 +403,18 @@ class EmailSender:
             summary_content = summary_path.read_text(encoding='utf-8')
             summary_name = summary_path.stem.replace('_summary', '').replace('_', ' ').title()
 
-            # Subject must be provided - no fallback extraction
-
-            # Remove the subject delimiter and content from summary for email body
-            # Extract only the summary part before ---Subject:
-            summary_lines = summary_content.split('\n')
-            summary_only = []
-            in_subject_section = False
-            for line in summary_lines:
-                if line.strip() == '---Subject:':
-                    in_subject_section = True
-                    break
-                summary_only.append(line)
-
-            cleaned_summary = '\n'.join(summary_only).strip()
+            # Try to parse as JSON, fallback to plain text
+            try:
+                data = json.loads(summary_content)
+                subject_to_use = data.get('subject', self._generate_default_subject())
+                summary_body = data.get('summary', '')
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse summary as JSON, falling back to plain text: {e}")
+                subject_to_use = subject if subject is not None else self._extract_subject_from_plain_text(summary_content)
+                summary_body = self._get_cleaned_summary(summary_content)
 
             # Convert markdown to HTML
-            html_content = markdown.markdown(cleaned_summary)
+            html_content = markdown.markdown(summary_body)
 
             # Format body as HTML
             body = f"""
@@ -412,7 +431,7 @@ class EmailSender:
 
             # Send email
             success = graph_send_email(
-                subject=subject,
+                subject=subject_to_use,
                 body=body,
                 recipients=self.config.recipients,
                 config=self.config
@@ -466,11 +485,7 @@ class EmailSender:
             try:
                 logger.info(f"Retrying failed email: {email_info['summary_name']}")
 
-                # Extract subject using transcriber
-                summary_content = summary_path.read_text(encoding='utf-8')
-                subject = transcriber.extract_subject_from_summary(summary_content)
-
-                if self.send_summary_email(summary_path, subject):
+                if self.send_summary_email(summary_path):
                     retry_count += 1
                     to_remove.append(file_hash)
                     logger.info(f"Successfully resent failed email: {email_info['summary_name']}")
