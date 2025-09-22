@@ -110,72 +110,58 @@ class LessonTranscriber:
 
         logger.info("Lesson Transcriber initialized successfully")
 
-    def extract_subject_from_summary(self, summary_content: str) -> str:
-        """Extract Swedish subject line from summary content, handling both JSON and plain text formats"""
-        # Try to parse as JSON first
-        try:
-            parsed = json.loads(summary_content.strip())
-            if isinstance(parsed, dict) and 'subject' in parsed:
-                subject = parsed['subject'].strip()
-                if subject:
-                    return subject
-                else:
-                    logger.warning("JSON subject is empty, using default")
-                    return self._generate_default_subject()
-            else:
-                logger.warning("JSON does not contain 'subject' key, falling back to text parsing")
-        except json.JSONDecodeError as e:
-            logger.debug(f"Summary content is not valid JSON: {e}. Falling back to text parsing")
-
-        # Fallback to plain text parsing for backward compatibility
-        lines = summary_content.split('\n')
-        subject_lines = []
-
-        collecting_subject = False
-        for line in lines:
-            stripped_line = line.strip()
-            if stripped_line.lower() == '---subject:':
-                collecting_subject = True
-                continue
-            elif collecting_subject:
-                # Collect subject lines until we hit another section or end
-                if stripped_line and not stripped_line.lower().startswith('---'):
-                    subject_lines.append(stripped_line)
-                else:
-                    break  # Stop at next section or empty line
-
-        subject = ' '.join(subject_lines).strip()
-
-        # Fallback to default if no subject found
-        if not subject:
-            return self._generate_default_subject()
-
-        return subject
 
     def _generate_default_subject(self) -> str:
         """Generate a default Swedish subject line"""
         return "Lektionssammanfattning"
 
-    def _get_default_combine_prompt(self):
-        """Get default combine summaries prompt if not in config"""
-        return """**ROLL OCH MÅL:**
-Agera som en AI-redaktör. Ditt uppdrag är att kombinera flera del-sammanfattningar från en lektion till ett enda, högkvalitativt slutresultat. Du ska producera både en sammanhängande sammanfattning och en kort, relevant ämnesrad.
+    def _parse_llm_output(self, llm_content: str) -> dict:
+        """
+        Parses the raw LLM output, expecting a JSON object.
+        Returns a dictionary with 'subject' and 'summary' keys.
+        """
+        try:
+            # The model sometimes wraps the JSON in markdown code fences. Remove them.
+            if llm_content.strip().startswith("```json"):
+                llm_content = llm_content.strip()[7:-3].strip()
 
-**INDATA (INDIVIDUELLA SAMMANFATTNINGAR):**
+            data = json.loads(llm_content)
+
+            subject = data.get('subject', self._generate_default_subject())
+            summary = data.get('summary', 'Sammanfattning saknas.')
+
+            if not subject:  # Handle empty string case
+                subject = self._generate_default_subject()
+
+            return {'subject': subject, 'summary': summary}
+
+        except json.JSONDecodeError as e:
+            logger.error(f"FATAL: Failed to decode JSON from LLM. Error: {e}")
+            logger.error(f"LLM Raw Output that caused the error:\n---\n{llm_content}\n---")
+            # Fallback: return the raw content as the summary to prevent a crash
+            return {
+                'subject': self._generate_default_subject(),
+                'summary': f"[JSON PARSING FAILED] Raw model output:\n{llm_content.strip()}"
+            }
+
+        
+    def _get_default_combine_prompt(self):
+        """Get default combine summaries prompt if not in config, ensuring it uses JSON format."""
+        return """Du är en expertredaktör. Syntetisera textdelarna nedan. Ditt svar måste vara ett giltigt JSON-objekt.
+
+**TEXTDELAR ATT SYNTETISERA:**
 {chunk_summaries}
 
-**REGLER OCH FORMAT:**
-1. **Sammanfattning:** Skapa en enda, sammanhängande text. Använd markdown. Överskrid inte {max_length} ord.
-2. **Ämnesrad:** Skapa en svensk ämnesrad på 3-6 ord som fångar lektionens kärna.
-3. **Outputformat:** Ditt svar MÅSTE följa denna mall exakt, inklusive separatorn '---Subject:'.
+**OBLIGATORISKT SVARSFORMAT (ENDAST JSON):**
+Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
+```json
+{
+  "subject": "En kombinerad ämnesrad här",
+  "summary": "Den färdiga, sammanhängande sammanfattningen börjar här..."
+}
+```"""
 
-Sammanfattning:
-[Skriv den kombinerade sammanfattningen här]
-
----Subject:
-[Skriv den svenska ämnesraden här]
-
-**Börja ditt svar nu.**"""
+  
 
     def _is_standard_whisper_model(self, model_name):
         """Check if the model name is a standard Whisper model"""
@@ -879,7 +865,7 @@ Sammanfattning:
         except Exception as e:
             logger.warning(f"Error unloading Ollama model {model_to_unload}: {e}")
 
-    def generate_summary(self, transcript, audio_timestamp=None):
+    def generate_summary(self, transcript):
         """
         Generate a summary of the transcript using Ollama
         """
@@ -924,9 +910,6 @@ Sammanfattning:
                         summary = self._summarize_chunk(chunk, is_chunk=True)
                         chunk_summaries.append(summary)
                         logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully (summary length: {len(summary)})")
-                        # Longer sleep between chunks to let Ollama recover fully
-                        logger.info(f"Waiting 15 seconds before processing next chunk...")
-                        time.sleep(15)
 
                         # Force model unload and reload between chunks to prevent state accumulation
                         if i < len(chunks) - 1:  # Don't do this after the last chunk
@@ -945,36 +928,18 @@ Sammanfattning:
                 # This ensures that even a single chunk gets the proper final prompt.
                 final_summary = self._combine_chunk_summaries(chunk_summaries)
 
-        # Add timestamp to JSON response if provided
-        if audio_timestamp:
-            try:
-                summary_dict = json.loads(final_summary)
-                summary_dict["timestamp"] = audio_timestamp
-                final_summary = json.dumps(summary_dict, ensure_ascii=False, indent=2)
-            except json.JSONDecodeError:
-                # Fallback: create JSON with the response as summary
-                summary_dict = {
-                    "subject": "Lektionssammanfattning",
-                    "summary": final_summary,
-                    "timestamp": audio_timestamp
-                }
-                final_summary = json.dumps(summary_dict, ensure_ascii=False, indent=2)
-
         return final_summary
 
     def process_lesson(self, audio_path, output_dir=None):
         """
-        Process a lesson audio file: transcribe and summarize
+        Process a lesson audio file: transcribe, summarize, and format.
         """
         try:
-            # Create output directory if specified
             if output_dir:
                 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-            # Transcribe the audio
             transcript = self.transcribe_audio(audio_path)
 
-            # Unload Whisper to free memory before summarization
             if self.use_standard_whisper and self.whisper_model is not None:
                 del self.whisper_model
                 self.whisper_model = None
@@ -989,32 +954,48 @@ Sammanfattning:
                 time.sleep(3)
                 logger.info("Whisper model unloaded and GPU cache cleared")
 
-            # Get audio file creation timestamp
-            audio_creation_time = os.path.getctime(audio_path)
-            formatted_timestamp = datetime.fromtimestamp(audio_creation_time).isoformat()
+            # Step 1: Get the raw JSON string from the LLM
+            raw_llm_output = self.generate_summary(transcript)
 
-            # Generate summary
-            summary = self.generate_summary(transcript, formatted_timestamp)
+            # Step 2: Parse the raw string into a clean Python dictionary
+            parsed_data = self._parse_llm_output(raw_llm_output)
+            subject = parsed_data['subject']
+            summary_content = parsed_data['summary']
 
-            # Prepare output
+            # Step 3: Programmatically get the timestamp
+            try:
+                file_timestamp = os.path.getmtime(audio_path)
+                creation_date_str = datetime.fromtimestamp(file_timestamp).strftime('%Y-%m-%d %H:%M')
+            except Exception as e:
+                logger.warning(f"Could not retrieve file timestamp: {e}")
+                creation_date_str = "Okänt datum"
+
+            # Step 4: Programmatically create the final summary body
+            timestamped_summary = f"Inspelat: {creation_date_str}\n\n{summary_content}"
+
+            # Step 5: Assemble the final result dictionary
             base_name = Path(audio_path).stem
             result = {
                 "audio_file": audio_path,
                 "transcript": transcript,
-                "summary": summary
+                "subject": subject,
+                "summary": timestamped_summary
             }
 
-            # Save to files if output directory specified
+            # Step 6: Create the text file for saving
+            final_output_for_file = (
+                f"Subject: {subject}\n\n"
+                f"---\n\n"
+                f"{timestamped_summary}"
+            )
+
             if output_dir:
                 transcript_file = Path(output_dir) / f"{base_name}_transcript.txt"
                 summary_file = Path(output_dir) / f"{base_name}_summary.txt"
-
                 transcript_file.write_text(transcript, encoding='utf-8')
-                summary_file.write_text(summary, encoding='utf-8')
-
+                summary_file.write_text(final_output_for_file, encoding='utf-8')
                 result["transcript_file"] = str(transcript_file)
                 result["summary_file"] = str(summary_file)
-
                 logger.info(f"Results saved to {output_dir}")
 
             return result
@@ -1182,13 +1163,10 @@ Use Ctrl+C to stop monitoring.
                             email_recipients = config.get('email_recipients', [])
                             if email_recipients:
                                 try:
-                                    email_sender = EmailSender(recipients=email_recipients)
+                                    subject = result.get('subject', transcriber._generate_default_subject())
                                     summary_path = Path(result['summary_file'])
 
-                                    # Extract subject from summary content
-                                    summary_content = summary_path.read_text(encoding='utf-8')
-                                    subject = transcriber.extract_subject_from_summary(summary_content)
-
+                                    # The email_sender is already initialized outside the loop
                                     success = email_sender.send_summary_email(summary_path, subject)
                                     if success:
                                         logger.info("Summary email sent successfully")
