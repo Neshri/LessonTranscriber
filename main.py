@@ -110,19 +110,19 @@ class LessonTranscriber:
         logger.info("Lesson Transcriber initialized successfully")
 
     def extract_subject_from_summary(self, summary_content: str) -> str:
-        """Extract Swedish subject line from summary content after ---Subject: delimiter"""
+        """Extract Swedish subject line from summary content after ---Subject: delimiter (case insensitive)"""
         lines = summary_content.split('\n')
         subject_lines = []
 
         collecting_subject = False
         for line in lines:
             stripped_line = line.strip()
-            if stripped_line == '---Subject:':
+            if stripped_line.lower() == '---subject:':
                 collecting_subject = True
                 continue
             elif collecting_subject:
                 # Collect subject lines until we hit another section or end
-                if stripped_line and not stripped_line.startswith('---'):
+                if stripped_line and not stripped_line.lower().startswith('---'):
                     subject_lines.append(stripped_line)
                 else:
                     break  # Stop at next section or empty line
