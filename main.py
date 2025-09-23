@@ -799,7 +799,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             logger.info("Clearing GPU cache before combined Ollama request")
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
-            time.sleep(2)
+            time.sleep(15)
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -950,7 +950,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 if torch and torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
-                time.sleep(5)  # Increased delay
+                time.sleep(15)  # Increased delay
                 logger.info(f"Successfully unloaded Ollama model and emptied GPU cache: {model_to_unload}")
             else:
                 logger.warning(f"Failed to unload model {model_to_unload}: {response.status_code} - {response.text}")
@@ -1008,7 +1008,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                             logger.info("Reloading Ollama model to ensure clean state for next chunk")
                             try:
                                 self._unload_ollama_model()
-                                time.sleep(5)  # Wait for unload to complete
+                                time.sleep(15)  # Wait for unload to complete
                                 # Note: We don't reload immediately, let it happen naturally on next request
                             except Exception as e:
                                 logger.warning(f"Error during model reload: {e}")
@@ -1053,7 +1053,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 self.pipe = None
             if torch and torch.cuda.is_available():
                 torch.cuda.empty_cache()
-                time.sleep(3)
+                time.sleep(15)
                 logger.info("Whisper model unloaded and GPU cache cleared")
 
             # Step 1: Get the raw JSON string from the LLM
@@ -1255,7 +1255,7 @@ Use Ctrl+C to stop monitoring.
                         logger.debug(f"No audio files found in {audio_source}")
                 except Exception as e:
                     logger.error(f"Error scanning audio directory: {e}")
-                    time.sleep(5)
+                    time.sleep(15)
                     continue
 
                 # First, retry any previously failed emails
@@ -1328,7 +1328,7 @@ Use Ctrl+C to stop monitoring.
                 if new_files_processed > 0:
                     logger.info(f"Processed {new_files_processed} new file(s) in this cycle")
 
-                time.sleep(5)  # Wait 5 seconds before next check
+                time.sleep(15)  # Wait 5 seconds before next check
 
         except KeyboardInterrupt:
             logger.info("Monitoring stopped by user")
