@@ -679,8 +679,8 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                                                 logger.info(f"Streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
                                                 logger.info(f"Chunk {chunk_count}, total length: {len(raw_response)}")
     
-                                            # Log progress every 10 chunks
-                                            elif chunk_count % 10 == 0:
+                                            # Log progress every 100 chunks
+                                            elif chunk_count % 100 == 0:
                                                 logger.info(f"Received chunk {chunk_count}, response length: {len(raw_response)}")
     
                                             # Safety check: break if response gets too long (likely model not following concise instructions)
@@ -708,7 +708,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                         raw_response = raw_response.replace("</end_of_turn>", "")
                         logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
                         logger.info(f"Full response length: {len(raw_response)} characters")
-                        logger.info(f"Raw LLM response: {repr(raw_response)}")
+                        #logger.info(f"Raw LLM response: {repr(raw_response)}")
 
                         request_end_time = time.time()
                         request_duration = request_end_time - request_start_time
