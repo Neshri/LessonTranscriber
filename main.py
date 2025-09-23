@@ -15,6 +15,16 @@ import argparse
 from pathlib import Path
 from email_sender import EmailSender
 
+try:
+    from mutagen.mp3 import MP3
+    from mutagen.flac import FLAC
+    from mutagen.wavpack import WavPack
+    from mutagen.oggopus import OggOpus
+    from mutagen.oggvorbis import OggVorbis
+    MUTAGEN_AVAILABLE = True
+except ImportError:
+    MUTAGEN_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -79,6 +89,8 @@ class LessonTranscriber:
         self.chunk_size_mb = config.get('chunk_size_mb', 10)  # MB of text per chunk
         self.max_context_tokens = config.get('max_context_tokens', 3200)
         self.overlap_tokens = config.get('overlap_tokens', 200)  # Overlap between chunks
+        self.min_duration_minutes = config.get('min_duration_minutes', 5)
+        self.max_duration_minutes = config.get('max_duration_minutes', 180)
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
@@ -348,6 +360,69 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             )
     
         return True
+
+    def check_audio_duration(self, audio_path):
+        """
+        Check if the audio file duration is within acceptable limits
+        Returns True if duration is valid, False if it should be skipped
+        """
+        if not MUTAGEN_AVAILABLE:
+            logger.warning("Mutagen not available, skipping duration check")
+            return True
+
+        try:
+            file_extension = Path(audio_path).suffix.lower()
+
+            if file_extension == '.mp3':
+                audio = MP3(audio_path)
+            elif file_extension == '.flac':
+                audio = FLAC(audio_path)
+            elif file_extension == '.wav':
+                # WAV files might not have duration in mutagen easily, but let's try
+                try:
+                    from mutagen.wave import WAVE
+                    audio = WAVE(audio_path)
+                except:
+                    logger.warning(f"Cannot check duration for WAV file: {audio_path}")
+                    return True
+            elif file_extension in ['.ogg', '.oga']:
+                # Try both Opus and Vorbis
+                try:
+                    audio = OggOpus(audio_path)
+                except:
+                    try:
+                        audio = OggVorbis(audio_path)
+                    except:
+                        logger.warning(f"Cannot check duration for OGG file: {audio_path}")
+                        return True
+            elif file_extension == '.m4a':
+                try:
+                    from mutagen.mp4 import MP4
+                    audio = MP4(audio_path)
+                except:
+                    logger.warning(f"Cannot check duration for M4A file: {audio_path}")
+                    return True
+            else:
+                logger.warning(f"Unsupported format for duration check: {file_extension}")
+                return True
+
+            duration_seconds = audio.info.length
+            duration_minutes = duration_seconds / 60
+
+            logger.info(".2f")
+
+            if duration_minutes < self.min_duration_minutes:
+                logger.warning(".2f")
+                return False
+            elif duration_minutes > self.max_duration_minutes:
+                logger.warning(".2f")
+                return False
+            else:
+                return True
+
+        except Exception as e:
+            logger.warning(f"Failed to check duration for {audio_path}: {e}")
+            return True  # Allow processing if duration check fails
 
     def transcribe_audio(self, audio_path):
         """
@@ -957,6 +1032,11 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             if output_dir:
                 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+            # Check audio duration before processing
+            if not self.check_audio_duration(audio_path):
+                logger.info(f"Skipping {audio_path} due to duration constraints")
+                return None  # Return None to indicate skipped file
+
             logger.info("Starting audio transcription")
             transcript = self.transcribe_audio(audio_path)
             logger.info(f"Transcription completed, length: {len(transcript)}")
@@ -1016,11 +1096,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
             # Step 6: Create the text file for saving
             logger.info("Creating output files")
-            final_output_for_file = (
-                f"Subject: {subject}\n\n"
-                f"---\n\n"
-                f"{timestamped_summary}"
-            )
+            final_output_for_file = timestamped_summary
 
             if output_dir:
                 transcript_file = Path(output_dir) / f"{base_name}_transcript.txt"
@@ -1198,6 +1274,14 @@ Use Ctrl+C to stop monitoring.
                             # Process the lesson
                             result = transcriber.process_lesson(audio_path, output_dir="output")
 
+                            if result is None:
+                                logger.info(f"Skipped {audio_path} due to duration constraints")
+                                # Still mark as processed to avoid re-checking
+                                file_hash = get_file_hash(audio_path)
+                                if file_hash:
+                                    processed_files[str(audio_path)] = file_hash
+                                continue
+
                             # Send summary email
                             email_recipients = config.get('email_recipients', [])
                             if email_recipients:
@@ -1257,6 +1341,10 @@ Use Ctrl+C to stop monitoring.
             try:
                 # Process the lesson
                 result = transcriber.process_lesson(audio_path, output_dir="output")
+
+                if result is None:
+                    print(f"Skipped {audio_path} due to duration constraints")
+                    continue
 
                 print("\n" + "="*60)
                 print(f"LESSON TRANSCRIPTION SUMMARY ({Path(audio_path).name})")

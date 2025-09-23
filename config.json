@@ -10,6 +10,8 @@
   "chunk_size_mb": 10,
   "max_context_tokens": 4096,
   "overlap_tokens": 200,
+  "min_duration_minutes": 5,
+  "max_duration_minutes": 180,
   "email_recipients": [
     "anton.lundgren94@gmail.com"
   ],
