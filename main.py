@@ -577,81 +577,88 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 logger.info(f"Summarization API call started with status: {response.status_code}")
                 logger.info(f"Response content preview: {response.text[:500]}")
 
-                if response.status_code == 200:
-                    # Handle streaming response
-                    raw_response = ""
-                    chunk_count = 0
-                    last_chunk_time = time.time()
+                try:
+                    if response.status_code == 200:
+                        # Handle streaming response
+                        raw_response = ""
+                        chunk_count = 0
+                        last_chunk_time = time.time()
 
-                    for line in response.iter_lines():
-                        current_time = time.time()
-                        if line:
-                            line = line.decode('utf-8').strip()
-                            if line:  # Skip empty lines
-                                try:
-                                    data = json.loads(line)
-                                    chunk_count += 1
-                                    last_chunk_time = current_time
+                        for line in response.iter_lines():
+                            current_time = time.time()
+                            if line:
+                                line = line.decode('utf-8').strip()
+                                if line:  # Skip empty lines
+                                    try:
+                                        data = json.loads(line)
+                                        chunk_count += 1
+                                        last_chunk_time = current_time
 
-                                    if 'response' in data:
-                                        chunk_text = data['response']
-                                        raw_response += chunk_text
+                                        if 'response' in data:
+                                            chunk_text = data['response']
+                                            raw_response += chunk_text
 
-                                        # Log the actual streaming content every 50 chunks
-                                        if chunk_count % 50 == 0:
-                                            logger.info(f"Streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
-                                            logger.info(f"Chunk {chunk_count}, total length: {len(raw_response)}")
+                                            # Log the actual streaming content every 50 chunks
+                                            if chunk_count % 50 == 0:
+                                                logger.info(f"Streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
+                                                logger.info(f"Chunk {chunk_count}, total length: {len(raw_response)}")
 
-                                        # Log progress every 10 chunks
-                                        elif chunk_count % 10 == 0:
-                                            logger.info(f"Received chunk {chunk_count}, response length: {len(raw_response)}")
-                
-                                        # Safety check: break if response gets too long (likely model not following concise instructions)
-                                        if len(raw_response) > 10000:  # 10k chars is way too long for a summary
-                                            logger.warning(f"Response too long ({len(raw_response)} chars), breaking early to save time")
+                                            # Log progress every 10 chunks
+                                            elif chunk_count % 10 == 0:
+                                                logger.info(f"Received chunk {chunk_count}, response length: {len(raw_response)}")
+
+                                            # Safety check: break if response gets too long (likely model not following concise instructions)
+                                            if len(raw_response) > 10000:  # 10k chars is way too long for a summary
+                                                logger.warning(f"Response too long ({len(raw_response)} chars), breaking early to save time")
+                                                break
+
+                                        if data.get('done', False):
+                                            logger.info(f"Streaming completed with {chunk_count} chunks")
                                             break
 
-                                    if data.get('done', False):
-                                        logger.info(f"Streaming completed with {chunk_count} chunks")
-                                        break
+                                    except json.JSONDecodeError:
+                                        logger.debug(f"Skipping non-JSON line: {line[:100]}...")
+                                        continue
 
-                                except json.JSONDecodeError:
-                                    logger.debug(f"Skipping non-JSON line: {line[:100]}...")
-                                    continue
+                            # Check for long periods without data (potential hang)
+                            time_since_last_chunk = current_time - last_chunk_time
+                            if time_since_last_chunk > 30:  # 30 seconds without data
+                                logger.warning(f"No streaming data received for {time_since_last_chunk:.1f} seconds")
+                                if time_since_last_chunk > 60:  # 1 minute without data
+                                    logger.error("Streaming appears to have stopped - breaking out")
+                                    break
 
-                        # Check for long periods without data (potential hang)
-                        time_since_last_chunk = current_time - last_chunk_time
-                        if time_since_last_chunk > 30:  # 30 seconds without data
-                            logger.warning(f"No streaming data received for {time_since_last_chunk:.1f} seconds")
-                            if time_since_last_chunk > 60:  # 1 minute without data
-                                logger.error("Streaming appears to have stopped - breaking out")
-                                break
+                        raw_response = raw_response.replace("</end_of_turn>", "")
+                        logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
+                        logger.info(f"Full response length: {len(raw_response)} characters")
+                        logger.info(f"Raw LLM response: {repr(raw_response)}")
 
-                    raw_response = raw_response.replace("</end_of_turn>", "")
-                    logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
-                    logger.info(f"Full response length: {len(raw_response)} characters")
-                    logger.info(f"Raw LLM response: {repr(raw_response)}")
+                        request_end_time = time.time()
+                        request_duration = request_end_time - request_start_time
+                        logger.info(f"Ollama request completed in: {request_duration:.2f} seconds")
 
-                    request_end_time = time.time()
-                    request_duration = request_end_time - request_start_time
-                    logger.info(f"Ollama request completed in: {request_duration:.2f} seconds")
+                        # Log GPU memory usage after Ollama request
+                        if torch and torch.cuda.is_available():
+                            gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
+                            logger.info(f"GPU memory after Ollama request: {gpu_memory_after:.2f} GB")
 
-                    # Log GPU memory usage after Ollama request
-                    if torch and torch.cuda.is_available():
-                        gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
-                        logger.info(f"GPU memory after Ollama request: {gpu_memory_after:.2f} GB")
-
-                    summary = raw_response.strip()
-                    logger.info(f"Chunk summary completed ({len(summary)} characters)")
-                    # Only unload if using a different model for chunks
-                    if is_chunk and self.chunk_model != self.ollama_model:
-                        self._unload_ollama_model(model=self.chunk_model)
+                        summary = raw_response.strip()
+                        logger.info(f"Chunk summary completed ({len(summary)} characters)")
+                        # Only unload if using a different model for chunks
+                        if is_chunk and self.chunk_model != self.ollama_model:
+                            self._unload_ollama_model(model=self.chunk_model)
+                        else:
+                            self._unload_ollama_model()
+                        return summary
                     else:
-                        self._unload_ollama_model()
-                    return summary
-                else:
-                    logger.error(f"Ollama API error: {response.status_code} - {response.text}")
-                    raise Exception(f"Ollama API returned {response.status_code}")
+                        logger.error(f"Ollama API error: {response.status_code} - {response.text}")
+                        raise Exception(f"Ollama API returned {response.status_code}")
+
+                except Exception as e:
+                    logger.error(f"Error during Ollama response processing: {e}")
+                    logger.info(f"Response status: {response.status_code}")
+                    logger.info(f"Response text: {response.text[:500]}")
+                    raise
 
             except (requests.exceptions.RequestException, Exception) as e:
                 logger.warning(f"Ollama request attempt {attempt + 1} failed: {e}")
