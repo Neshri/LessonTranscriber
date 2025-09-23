@@ -91,6 +91,7 @@ class LessonTranscriber:
         self.overlap_tokens = config.get('overlap_tokens', 200)  # Overlap between chunks
         self.min_duration_minutes = config.get('min_duration_minutes', 5)
         self.max_duration_minutes = config.get('max_duration_minutes', 180)
+        self.max_streaming_time_minutes = config.get('max_streaming_time_minutes', 10)
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
@@ -661,6 +662,9 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
                         for line in response.iter_lines():
                             current_time = time.time()
+                            if current_time - request_start_time > self.max_streaming_time_minutes * 60:
+                                logger.error(f"Streaming exceeded max time of {self.max_streaming_time_minutes} minutes")
+                                raise Exception("Streaming timeout exceeded")
                             if line:
                                 line = line.decode('utf-8').strip()
                                 #logger.info(f"Received Ollama line: {repr(line)}")  # Log every line for debugging
@@ -743,12 +747,17 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 if isinstance(e, requests.exceptions.ReadTimeout):
                     logger.error(f"Read timeout occurred after {progressive_timeout} seconds for chunk summarization")
                     if attempt < max_retries - 1:
-                        logger.info("Ollama service appears to be hanging. Restarting service and waiting before retry...")
-                        self._restart_ollama_service()
-                        time.sleep(60)  # Longer wait after restart
+                        # Check if Ollama service is responsive before restarting
+                        if not self._check_ollama_health():
+                            logger.info("Ollama service health check failed. Restarting service...")
+                            self._restart_ollama_service()
+                            time.sleep(60)  # Longer wait after restart
+                        else:
+                            logger.info("Ollama service is responsive despite timeout. Waiting before retry...")
+                            time.sleep(30)  # Shorter wait if service is healthy
                     else:
                         logger.error(f"All {max_retries} Ollama attempts failed")
-                        raise Exception("Ollama service keeps hanging. Check Ollama logs and GPU resources.")
+                        raise Exception("Ollama service keeps timing out. Check Ollama configuration and resources.")
                 elif isinstance(e, requests.exceptions.ConnectionError):
                     logger.error(f"Connection error to Ollama service: {e}")
                     if attempt < max_retries - 1:
@@ -758,6 +767,15 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                     else:
                         logger.error(f"All {max_retries} Ollama attempts failed")
                         raise Exception("Cannot connect to Ollama after retries. Make sure it's running on localhost:11434")
+                elif "streaming timeout" in str(e).lower():
+                    logger.error(f"Streaming timeout exceeded for chunk summarization")
+                    if attempt < max_retries - 1:
+                        logger.info("Streaming timeout indicates service hang. Restarting Ollama service...")
+                        self._restart_ollama_service()
+                        time.sleep(60)
+                    else:
+                        logger.error(f"All {max_retries} Ollama attempts failed due to streaming timeouts")
+                        raise Exception("Ollama streaming keeps timing out. Check Ollama configuration and resources.")
                 else:
                     logger.error(f"Other error type: {type(e).__name__}: {e}")
                     if attempt < max_retries - 1:
@@ -848,6 +866,9 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
                     for line in response.iter_lines():
                         current_time = time.time()
+                        if current_time - request_start_time > self.max_streaming_time_minutes * 60:
+                            logger.error(f"Combined streaming exceeded max time of {self.max_streaming_time_minutes} minutes")
+                            raise Exception("Combined streaming timeout exceeded")
                         if line:
                             line = line.decode('utf-8').strip()
                             if line:  # Skip empty lines
@@ -916,13 +937,28 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 logger.warning(f"Combined summary attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
                     if isinstance(e, requests.exceptions.ReadTimeout):
-                        logger.info("Combined summary request hanging. Restarting Ollama service and waiting...")
-                        self._restart_ollama_service()
-                        time.sleep(60)
+                        # Check if Ollama service is responsive before restarting
+                        if not self._check_ollama_health():
+                            logger.info("Combined summary: Ollama service health check failed. Restarting service...")
+                            self._restart_ollama_service()
+                            time.sleep(60)
+                        else:
+                            logger.info("Combined summary: Ollama service is responsive despite timeout. Waiting before retry...")
+                            time.sleep(30)
                     elif isinstance(e, requests.exceptions.ConnectionError):
                         logger.info("Connection failed for combined summary. Restarting Ollama service...")
                         self._restart_ollama_service()
                         time.sleep(30)
+                    elif "streaming timeout" in str(e).lower():
+                        logger.error(f"Streaming timeout exceeded for combined summarization")
+                        if attempt < max_retries - 1:
+                            logger.info("Combined streaming timeout indicates service hang. Restarting Ollama service...")
+                            self._restart_ollama_service()
+                            time.sleep(60)
+                        else:
+                            logger.error(f"All {max_retries} combined summary attempts failed due to streaming timeouts")
+                            # Fallback: return concatenated individual summaries
+                            return "\n\n".join(chunk_summaries)
                     else:
                         logger.info("Ollama service may be busy. Waiting 30 seconds before retry...")
                         time.sleep(30)
@@ -1003,15 +1039,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                         chunk_summaries.append(summary)
                         logger.info(f"Chunk {i+1}/{len(chunks)} summarized successfully (summary length: {len(summary)})")
 
-                        # Force model unload and reload between chunks to prevent state accumulation
-                        if i < len(chunks) - 1:  # Don't do this after the last chunk
-                            logger.info("Reloading Ollama model to ensure clean state for next chunk")
-                            try:
-                                self._unload_ollama_model()
-                                time.sleep(15)  # Wait for unload to complete
-                                # Note: We don't reload immediately, let it happen naturally on next request
-                            except Exception as e:
-                                logger.warning(f"Error during model reload: {e}")
+                        # Note: Model unloading is handled in _summarize_chunk to prevent double unloading
                     except Exception as e:
                         logger.error(f"Failed to summarize chunk {i+1} (length: {len(chunk)}): {e}")
                         chunk_summaries.append(f"[Error summarizing part {i+1}: {str(e)}]")
