@@ -16,6 +16,12 @@ from pathlib import Path
 from email_sender import EmailSender
 
 try:
+    import signal
+    HAS_SIGNAL = True
+except ImportError:
+    HAS_SIGNAL = False
+
+try:
     from mutagen.mp3 import MP3
     from mutagen.flac import FLAC
     from mutagen.wavpack import WavPack
@@ -92,6 +98,7 @@ class LessonTranscriber:
         self.min_duration_minutes = config.get('min_duration_minutes', 5)
         self.max_duration_minutes = config.get('max_duration_minutes', 180)
         self.max_streaming_time_minutes = config.get('max_streaming_time_minutes', 10)
+        self.streaming_line_timeout_seconds = config.get('streaming_line_timeout_seconds', 30)
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
@@ -660,54 +667,69 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                         chunk_count = 0
                         last_chunk_time = time.time()
 
-                        for line in response.iter_lines():
-                            current_time = time.time()
-                            if current_time - request_start_time > self.max_streaming_time_minutes * 60:
-                                logger.error(f"Streaming exceeded max time of {self.max_streaming_time_minutes} minutes")
-                                raise Exception("Streaming timeout exceeded")
-                            if line:
-                                line = line.decode('utf-8').strip()
-                                #logger.info(f"Received Ollama line: {repr(line)}")  # Log every line for debugging
-                                if line:  # Skip empty lines
-                                    try:
-                                        data = json.loads(line)
-                                        chunk_count += 1
-                                        last_chunk_time = current_time
-    
-                                        if 'response' in data:
-                                            chunk_text = data['response']
-                                            raw_response += chunk_text
-    
-                                            # Log the actual streaming content every 50 chunks
-                                            if chunk_count % 50 == 0:
-                                                logger.info(f"Streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
-                                                logger.info(f"Chunk {chunk_count}, total length: {len(raw_response)}")
-    
-                                            # Log progress every 100 chunks
-                                            elif chunk_count % 100 == 0:
-                                                logger.info(f"Received chunk {chunk_count}, response length: {len(raw_response)}")
-    
-                                            # Safety check: break if response gets too long (likely model not following concise instructions)
-                                            if len(raw_response) > 10000:  # 10k chars is way too long for a summary
-                                                logger.warning(f"Response too long ({len(raw_response)} chars), breaking early to save time")
-                                                break
-    
-                                        if data.get('done', False):
-                                            logger.info(f"Streaming completed with {chunk_count} chunks")
-                                            break
-    
-                                    except json.JSONDecodeError:
-                                        logger.warning(f"Failed to parse JSON line: {repr(line)} - adding to raw response")
-                                        raw_response += line + "\n"  # Add malformed lines to raw response
-                                        continue
+                        if HAS_SIGNAL:
+                            def timeout_handler(signum, frame):
+                                raise TimeoutError("Streaming line timeout")
+                            signal.signal(signal.SIGALRM, timeout_handler)
+                            signal.alarm(self.streaming_line_timeout_seconds)
+                        try:
+                            for line in response.iter_lines():
+                                current_time = time.time()
+                                if current_time - request_start_time > self.max_streaming_time_minutes * 60:
+                                    logger.error(f"Streaming exceeded max time of {self.max_streaming_time_minutes} minutes")
+                                    raise Exception("Streaming timeout exceeded")
+                                if line:
+                                    line = line.decode('utf-8').strip()
+                                    #logger.info(f"Received Ollama line: {repr(line)}")  # Log every line for debugging
+                                    if line:  # Skip empty lines
+                                        try:
+                                            data = json.loads(line)
+                                            chunk_count += 1
+                                            last_chunk_time = current_time
 
-                            # Check for long periods without data (potential hang)
-                            time_since_last_chunk = current_time - last_chunk_time
-                            if time_since_last_chunk > 30:  # 30 seconds without data
-                                logger.warning(f"No streaming data received for {time_since_last_chunk:.1f} seconds")
-                                if time_since_last_chunk > 60:  # 1 minute without data
-                                    logger.error("Streaming appears to have stopped - breaking out")
-                                    break
+                                            if 'response' in data:
+                                                chunk_text = data['response']
+                                                raw_response += chunk_text
+
+                                                # Log the actual streaming content every 50 chunks
+                                                if chunk_count % 50 == 0:
+                                                    logger.info(f"Streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
+                                                    logger.info(f"Chunk {chunk_count}, total length: {len(raw_response)}")
+
+                                                # Log progress every 100 chunks
+                                                elif chunk_count % 100 == 0:
+                                                    logger.info(f"Received chunk {chunk_count}, response length: {len(raw_response)}")
+
+                                                # Safety check: break if response gets too long (likely model not following concise instructions)
+                                                if len(raw_response) > 10000:  # 10k chars is way too long for a summary
+                                                    logger.warning(f"Response too long ({len(raw_response)} chars), breaking early to save time")
+                                                    break
+
+                                            if data.get('done', False):
+                                                logger.info(f"Streaming completed with {chunk_count} chunks")
+                                                break
+
+                                        except json.JSONDecodeError:
+                                            logger.warning(f"Failed to parse JSON line: {repr(line)} - adding to raw response")
+                                            raw_response += line + "\n"  # Add malformed lines to raw response
+                                            continue
+
+                                if HAS_SIGNAL:
+                                    signal.alarm(0)
+                                    signal.alarm(self.streaming_line_timeout_seconds)
+                                # Check for long periods without data (potential hang)
+                                time_since_last_chunk = current_time - last_chunk_time
+                                if time_since_last_chunk > 30:  # 30 seconds without data
+                                    logger.warning(f"No streaming data received for {time_since_last_chunk:.1f} seconds")
+                                    if time_since_last_chunk > 60:  # 1 minute without data
+                                        logger.error("Streaming appears to have stopped - breaking out")
+                                        break
+                        except TimeoutError:
+                            logger.warning("Streaming timed out waiting for line")
+                            break
+                        finally:
+                            if HAS_SIGNAL:
+                                signal.alarm(0)
 
                         raw_response = raw_response.replace("</end_of_turn>", "")
                         logger.info(f"Raw Ollama response (first 500 chars): {raw_response[:500]}...")
@@ -864,53 +886,68 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                     chunk_count = 0
                     last_chunk_time = time.time()
 
-                    for line in response.iter_lines():
-                        current_time = time.time()
-                        if current_time - request_start_time > self.max_streaming_time_minutes * 60:
-                            logger.error(f"Combined streaming exceeded max time of {self.max_streaming_time_minutes} minutes")
-                            raise Exception("Combined streaming timeout exceeded")
-                        if line:
-                            line = line.decode('utf-8').strip()
-                            if line:  # Skip empty lines
-                                try:
-                                    data = json.loads(line)
-                                    chunk_count += 1
-                                    last_chunk_time = current_time
+                    if HAS_SIGNAL:
+                        def timeout_handler(signum, frame):
+                            raise TimeoutError("Streaming line timeout")
+                        signal.signal(signal.SIGALRM, timeout_handler)
+                        signal.alarm(self.streaming_line_timeout_seconds)
+                    try:
+                        for line in response.iter_lines():
+                            current_time = time.time()
+                            if current_time - request_start_time > self.max_streaming_time_minutes * 60:
+                                logger.error(f"Combined streaming exceeded max time of {self.max_streaming_time_minutes} minutes")
+                                raise Exception("Combined streaming timeout exceeded")
+                            if line:
+                                line = line.decode('utf-8').strip()
+                                if line:  # Skip empty lines
+                                    try:
+                                        data = json.loads(line)
+                                        chunk_count += 1
+                                        last_chunk_time = current_time
 
-                                    if 'response' in data:
-                                        chunk_text = data['response']
-                                        raw_response += chunk_text
+                                        if 'response' in data:
+                                            chunk_text = data['response']
+                                            raw_response += chunk_text
 
-                                        # Log the actual streaming content every 50 chunks
-                                        if chunk_count % 50 == 0:
-                                            logger.info(f"Combined streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
-                                            logger.info(f"Combined chunk {chunk_count}, total length: {len(raw_response)}")
+                                            # Log the actual streaming content every 50 chunks
+                                            if chunk_count % 50 == 0:
+                                                logger.info(f"Combined streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
+                                                logger.info(f"Combined chunk {chunk_count}, total length: {len(raw_response)}")
 
-                                        # Log progress every 10 chunks
-                                        elif chunk_count % 10 == 0:
-                                            logger.info(f"Combined: Received chunk {chunk_count}, response length: {len(raw_response)}")
+                                            # Log progress every 10 chunks
+                                            elif chunk_count % 10 == 0:
+                                                logger.info(f"Combined: Received chunk {chunk_count}, response length: {len(raw_response)}")
 
-                                        # Safety check: break if response gets too long
-                                        if len(raw_response) > 10000:  # 10k chars is way too long for a summary
-                                            logger.warning(f"Combined: Response too long ({len(raw_response)} chars), breaking early")
+                                            # Safety check: break if response gets too long
+                                            if len(raw_response) > 10000:  # 10k chars is way too long for a summary
+                                                logger.warning(f"Combined: Response too long ({len(raw_response)} chars), breaking early")
+                                                break
+
+                                        if data.get('done', False):
+                                            logger.info(f"Combined streaming completed with {chunk_count} chunks")
                                             break
 
-                                    if data.get('done', False):
-                                        logger.info(f"Combined streaming completed with {chunk_count} chunks")
-                                        break
+                                    except json.JSONDecodeError:
+                                        logger.debug(f"Combined: Skipping non-JSON line: {line[:100]}...")
 
-                                except json.JSONDecodeError:
-                                    logger.debug(f"Combined: Skipping non-JSON line: {line[:100]}...")
-                                    continue
+                                        continue
 
-                        # Check for long periods without data (potential hang)
-                        time_since_last_chunk = current_time - last_chunk_time
-                        if time_since_last_chunk > 30:  # 30 seconds without data
-                            logger.warning(f"Combined: No streaming data received for {time_since_last_chunk:.1f} seconds")
-                            if time_since_last_chunk > 60:  # 1 minute without data
-                                logger.error("Combined: Streaming appears to have stopped - breaking out")
-                                break
-
+                            if HAS_SIGNAL:
+                                signal.alarm(0)
+                                signal.alarm(self.streaming_line_timeout_seconds)
+                            # Check for long periods without data (potential hang)
+                            time_since_last_chunk = current_time - last_chunk_time
+                            if time_since_last_chunk > 30:  # 30 seconds without data
+                                logger.warning(f"Combined: No streaming data received for {time_since_last_chunk:.1f} seconds")
+                                if time_since_last_chunk > 60:  # 1 minute without data
+                                    logger.error("Combined: Streaming appears to have stopped - breaking out")
+                                    break
+                    except TimeoutError:
+                        logger.warning("Streaming timed out waiting for line")
+                        break
+                    finally:
+                        if HAS_SIGNAL:
+                            signal.alarm(0)
                     raw_response = raw_response.replace("</end_of_turn>", "")
                     logger.info(f"Raw combined summary response (first 500 chars): {raw_response[:500]}...")
                     logger.info(f"Full combined response length: {len(raw_response)} characters")
