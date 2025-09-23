@@ -588,7 +588,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                             current_time = time.time()
                             if line:
                                 line = line.decode('utf-8').strip()
-                                logger.info(f"Received Ollama line: {repr(line)}")  # Log every line for debugging
+                                #logger.info(f"Received Ollama line: {repr(line)}")  # Log every line for debugging
                                 if line:  # Skip empty lines
                                     try:
                                         data = json.loads(line)
