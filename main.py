@@ -588,36 +588,38 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                             current_time = time.time()
                             if line:
                                 line = line.decode('utf-8').strip()
+                                logger.info(f"Received Ollama line: {repr(line)}")  # Log every line for debugging
                                 if line:  # Skip empty lines
                                     try:
                                         data = json.loads(line)
                                         chunk_count += 1
                                         last_chunk_time = current_time
-
+    
                                         if 'response' in data:
                                             chunk_text = data['response']
                                             raw_response += chunk_text
-
+    
                                             # Log the actual streaming content every 50 chunks
                                             if chunk_count % 50 == 0:
                                                 logger.info(f"Streaming content: '{raw_response[-200:]}...'")  # Last 200 chars
                                                 logger.info(f"Chunk {chunk_count}, total length: {len(raw_response)}")
-
+    
                                             # Log progress every 10 chunks
                                             elif chunk_count % 10 == 0:
                                                 logger.info(f"Received chunk {chunk_count}, response length: {len(raw_response)}")
-
+    
                                             # Safety check: break if response gets too long (likely model not following concise instructions)
                                             if len(raw_response) > 10000:  # 10k chars is way too long for a summary
                                                 logger.warning(f"Response too long ({len(raw_response)} chars), breaking early to save time")
                                                 break
-
+    
                                         if data.get('done', False):
                                             logger.info(f"Streaming completed with {chunk_count} chunks")
                                             break
-
+    
                                     except json.JSONDecodeError:
-                                        logger.debug(f"Skipping non-JSON line: {line[:100]}...")
+                                        logger.warning(f"Failed to parse JSON line: {repr(line)} - adding to raw response")
+                                        raw_response += line + "\n"  # Add malformed lines to raw response
                                         continue
 
                             # Check for long periods without data (potential hang)
@@ -949,12 +951,17 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
         """
         Process a lesson audio file: transcribe, summarize, and format.
         """
+        logger.info(f"Starting process_lesson for {audio_path}")
         try:
+            logger.info("Creating output directory if needed")
             if output_dir:
                 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+            logger.info("Starting audio transcription")
             transcript = self.transcribe_audio(audio_path)
+            logger.info(f"Transcription completed, length: {len(transcript)}")
 
+            logger.info("Unloading Whisper models")
             if self.use_standard_whisper and self.whisper_model is not None:
                 del self.whisper_model
                 self.whisper_model = None
@@ -970,27 +977,35 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 logger.info("Whisper model unloaded and GPU cache cleared")
 
             # Step 1: Get the raw JSON string from the LLM
+            logger.info("Starting summary generation")
             raw_llm_output = self.generate_summary(transcript)
             logger.info(f"Raw LLM output from generate_summary: {repr(raw_llm_output)}")
 
             # Step 2: Parse the raw string into a clean Python dictionary
+            logger.info("Parsing LLM output")
             parsed_data = self._parse_llm_output(raw_llm_output)
             logger.info(f"Parsed data: {parsed_data}")
             subject = parsed_data['subject']
             summary_content = parsed_data['summary']
+            logger.info(f"Extracted subject: {repr(subject)}, summary length: {len(summary_content)}")
 
             # Step 3: Programmatically get the timestamp
+            logger.info("Retrieving file timestamp")
             try:
                 file_timestamp = os.path.getmtime(audio_path)
                 creation_date_str = datetime.fromtimestamp(file_timestamp).strftime('%Y-%m-%d %H:%M')
+                logger.info(f"File timestamp: {creation_date_str}")
             except Exception as e:
                 logger.warning(f"Could not retrieve file timestamp: {e}")
                 creation_date_str = "Okänt datum"
 
             # Step 4: Programmatically create the final summary body
+            logger.info("Creating timestamped summary")
             timestamped_summary = f"Inspelat: {creation_date_str}\n\n{summary_content}"
+            logger.info(f"Timestamped summary length: {len(timestamped_summary)}")
 
             # Step 5: Assemble the final result dictionary
+            logger.info("Assembling result dictionary")
             base_name = Path(audio_path).stem
             result = {
                 "audio_file": audio_path,
@@ -1000,6 +1015,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             }
 
             # Step 6: Create the text file for saving
+            logger.info("Creating output files")
             final_output_for_file = (
                 f"Subject: {subject}\n\n"
                 f"---\n\n"
@@ -1009,16 +1025,22 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             if output_dir:
                 transcript_file = Path(output_dir) / f"{base_name}_transcript.txt"
                 summary_file = Path(output_dir) / f"{base_name}_summary.txt"
+                logger.info(f"Writing transcript to {transcript_file}")
                 transcript_file.write_text(transcript, encoding='utf-8')
+                logger.info(f"Writing summary to {summary_file}")
                 summary_file.write_text(final_output_for_file, encoding='utf-8')
                 result["transcript_file"] = str(transcript_file)
                 result["summary_file"] = str(summary_file)
                 logger.info(f"Results saved to {output_dir}")
 
+            logger.info("process_lesson completed successfully")
             return result
 
         except Exception as e:
             logger.error(f"Failed to process lesson: {e}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
 
