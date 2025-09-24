@@ -1050,12 +1050,10 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             # Step 1: Get the raw JSON string from the LLM
             logger.info("Starting summary generation")
             raw_llm_output = self.generate_summary(transcript)
-            logger.info(f"Raw LLM output from generate_summary: {repr(raw_llm_output)}")
 
             # Step 2: Parse the raw string into a clean Python dictionary
             logger.info("Parsing LLM output")
             parsed_data = self._parse_llm_output(raw_llm_output)
-            logger.info(f"Parsed data: {parsed_data}")
             subject = parsed_data['subject']
             summary_content = parsed_data['summary']
             logger.info(f"Extracted subject: {repr(subject)}, summary length: {len(summary_content)}")
