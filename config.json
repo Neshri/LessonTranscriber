@@ -1,6 +1,6 @@
 {
   "whisper_model": "KBLab/kb-whisper-large",
-  "ollama_model": "gemma3-multi-gpu",
+  "ollama_model": "gpt-oss:20b",
   "ollama_url": "http://127.0.0.1:11434",
   "summarization_prompt_template": "Din enda uppgift är att konvertera följande TEXT till ett JSON-objekt. Svara inte med något annat än giltig JSON. JSON-objektet måste innehålla exakt två nycklar: \"subject\" och \"summary\".\n\n**TEXT ATT KONVERTERA:**\n{transcript}\n\n**OBLIGATORISKT JSON-FORMAT:**\n```json\n{{\n  \"subject\": \"En kort, beskrivande ämnesrad (3-6 ord) baserad på texten\",\n  \"summary\": \"En detaljerad och välskriven sammanfattning av texten.\"\n}}\n```",
   "chunk_summarization_prompt_template": "Destillera följande textavsnitt till dess absoluta kärna. Sammanfatta de allra viktigaste punkterna i **max 4–5 korta meningar**. Ignorera all sekundär information. Svara endast med den färdiga sammanfattningen. Transkription:\n{transcript}",
