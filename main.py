@@ -1257,7 +1257,12 @@ Use Ctrl+C to stop monitoring.
                             result = transcriber.process_lesson(audio_path, output_dir="output")
 
                             if result is None:
-                                logger.info(f"Skipped {audio_path} due to duration constraints")
+                                logger.info(f"Skipped {audio_path} due to duration constraints, removing file")
+                                try:
+                                    os.remove(audio_path)
+                                    logger.info(f"Removed file: {audio_path}")
+                                except Exception as e:
+                                    logger.error(f"Failed to remove file {audio_path}: {e}")
                                 continue
 
                             # Send summary email
@@ -1307,9 +1312,9 @@ Use Ctrl+C to stop monitoring.
                     logger.info(f"Processed {new_files_processed} new file(s) in this cycle")
 
                 # Send emails for any processed files that haven't been emailed yet
-                for file_path, file_hash in processed_files.items():
-                    if file_hash not in email_sender.sent_emails:
-                        summary_path = Path("output") / f"{Path(file_path).stem}_summary.txt"
+                for file_path in processed_files:
+                    summary_path = Path("output") / f"{Path(file_path).stem}_summary.txt"
+                    if not email_sender._is_summary_sent(summary_path):
                         if summary_path.exists():
                             try:
                                 success = email_sender.send_summary_email(summary_path)
