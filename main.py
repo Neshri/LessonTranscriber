@@ -1247,13 +1247,6 @@ Use Ctrl+C to stop monitoring.
                     time.sleep(15)
                     continue
 
-                # First, retry any previously failed emails
-                try:
-                    retry_count = email_sender.retry_failed_emails(transcriber)
-                    if retry_count > 0:
-                        logger.info(f"Successfully retried {retry_count} previously failed emails")
-                except Exception as e:
-                    logger.error(f"Failed to retry previously failed emails: {e}")
 
                 new_files_processed = 0
                 for audio_path in current_audio_paths:
@@ -1265,10 +1258,6 @@ Use Ctrl+C to stop monitoring.
 
                             if result is None:
                                 logger.info(f"Skipped {audio_path} due to duration constraints")
-                                # Still mark as processed to avoid re-checking
-                                file_hash = get_file_hash(audio_path)
-                                if file_hash:
-                                    processed_files[str(audio_path)] = file_hash
                                 continue
 
                             # Send summary email
@@ -1316,6 +1305,20 @@ Use Ctrl+C to stop monitoring.
 
                 if new_files_processed > 0:
                     logger.info(f"Processed {new_files_processed} new file(s) in this cycle")
+
+                # Send emails for any processed files that haven't been emailed yet
+                for file_path, file_hash in processed_files.items():
+                    if file_hash not in email_sender.sent_emails:
+                        summary_path = Path("output") / f"{Path(file_path).stem}_summary.txt"
+                        if summary_path.exists():
+                            try:
+                                success = email_sender.send_summary_email(summary_path)
+                                if success:
+                                    logger.info(f"Summary email sent for previously processed file: {file_path}")
+                                else:
+                                    logger.warning(f"Failed to send summary email for: {file_path}")
+                            except Exception as e:
+                                logger.error(f"Error sending email for {file_path}: {e}")
 
                 time.sleep(15)  # Wait 5 seconds before next check
 
