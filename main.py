@@ -15,11 +15,6 @@ import argparse
 from pathlib import Path
 from email_sender import EmailSender
 
-try:
-    import signal
-    HAS_SIGNAL = True
-except ImportError:
-    HAS_SIGNAL = False
 
 try:
     from mutagen.mp3 import MP3
@@ -95,6 +90,8 @@ class LessonTranscriber:
         self.chunk_size_mb = config.get('chunk_size_mb', 10)  # MB of text per chunk
         self.max_context_tokens = config.get('max_context_tokens', 3200)
         self.overlap_tokens = config.get('overlap_tokens', 200)  # Overlap between chunks
+        self.context_margin = config.get('context_margin', 1000)  # Margin for prompts
+        self.chunk_context_overhead = config.get('chunk_context_overhead', 500)  # Overhead for chunk content
         self.min_duration_minutes = config.get('min_duration_minutes', 5)
         self.max_duration_minutes = config.get('max_duration_minutes', 180)
         self.max_streaming_time_minutes = config.get('max_streaming_time_minutes', 10)
@@ -580,7 +577,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
         # Analyze transcript size - if very small, use minimal context
         chunk_words = len(transcript_chunk.split())
-        context_limit = min(4096, chunk_words + 500)  # Context should fit content + overhead
+        context_limit = min(self.max_context_tokens, chunk_words + self.chunk_context_overhead)  # Context should fit content + overhead
 
         logger.info(f"Chunk has ~{chunk_words} words, using context_limit={context_limit}")
 
@@ -970,7 +967,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
         logger.info(f"Transcript size: {transcript_mb:.1f}MB, estimated {estimated_tokens} tokens, needs ~{context_required} context tokens")
 
         # If transcript fits in our context window, summarize normally
-        safe_context = self.max_context_tokens - 1000  # Leave more room for prompt + generation
+        safe_context = self.max_context_tokens - self.context_margin  # Leave room for prompt + generation
         logger.info(f"Checking if transcript fits: {estimated_tokens} < {safe_context}")
 
         if estimated_tokens < safe_context:
@@ -983,7 +980,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             # Split into chunks
             chunks = self._split_text_into_chunks(
                 transcript,
-                max_tokens=self.max_context_tokens - 1000,  # Leave room for prompt
+                max_tokens=self.max_context_tokens - self.context_margin,  # Leave room for prompt
                 overlap_tokens=self.overlap_tokens
             )
 

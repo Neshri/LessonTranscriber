@@ -10,6 +10,8 @@
   "chunk_size_mb": 10,
   "max_context_tokens": 4096,
   "overlap_tokens": 200,
+  "context_margin": 1000,
+  "chunk_context_overhead": 500,
   "min_duration_minutes": 5,
   "max_duration_minutes": 180,
   "max_streaming_time_minutes": 5,
