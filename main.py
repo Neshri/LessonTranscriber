@@ -1085,7 +1085,8 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
             # Step 6: Create the text file for saving
             logger.info("Creating output files")
-            final_output_for_file = timestamped_summary
+            # Include subject in file for later email extraction
+            final_output_for_file = f"---Subject:\n{subject}\n\n{timestamped_summary}"
 
             if output_dir:
                 transcript_file = Path(output_dir) / f"{base_name}_transcript.txt"
