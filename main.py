@@ -705,11 +705,6 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
                         summary = raw_response.strip()
                         logger.info(f"Chunk summary completed ({len(summary)} characters)")
-                        # Only unload if using a different model for chunks
-                        if is_chunk and self.chunk_model != self.ollama_model:
-                            self._unload_ollama_model(model=self.chunk_model)
-                        else:
-                            self._unload_ollama_model()
                         return summary
                     else:
                         logger.error(f"Ollama API error: {response.status_code} - {response.text}")
@@ -886,7 +881,6 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
                     final_summary = raw_response.strip()
                     logger.info(f"Final combined summary completed ({len(final_summary)} characters)")
-                    self._unload_ollama_model()
                     return final_summary
                 else:
                     logger.error(f"Combined summary failed: {response.status_code} - {response.text}")
@@ -1047,6 +1041,9 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             # Step 1: Get the raw JSON string from the LLM
             logger.info("Starting summary generation")
             raw_llm_output = self.generate_summary(transcript)
+
+            # Unload Ollama model after summarization
+            self._unload_ollama_model()
 
             # Step 2: Parse the raw string into a clean Python dictionary
             logger.info("Parsing LLM output")
