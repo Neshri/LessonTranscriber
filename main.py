@@ -417,13 +417,13 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             duration_seconds = audio.info.length
             duration_minutes = duration_seconds / 60
 
-            logger.info(".2f")
+            logger.info(f"Audio duration: {duration_minutes:.2f} minutes")
 
             if duration_minutes < self.min_duration_minutes:
-                logger.warning(".2f")
+                logger.warning(f"Audio too short: {duration_minutes:.2f} minutes (minimum: {self.min_duration_minutes})")
                 return False
             elif duration_minutes > self.max_duration_minutes:
-                logger.warning(".2f")
+                logger.warning(f"Audio too long: {duration_minutes:.2f} minutes (maximum: {self.max_duration_minutes})")
                 return False
             else:
                 return True
@@ -1086,7 +1086,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             # Step 6: Create the text file for saving
             logger.info("Creating output files")
             # Include subject in file for later email extraction
-            final_output_for_file = f"---Subject:\n{subject}\n\n{timestamped_summary}"
+            final_output_for_file = f"{timestamped_summary}\n\n---Subject:\n{subject}"
 
             if output_dir:
                 transcript_file = Path(output_dir) / f"{base_name}_transcript.txt"
