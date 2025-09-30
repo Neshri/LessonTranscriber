@@ -62,7 +62,9 @@ def insert_processed_file(conn, file_path, file_hash, status='processed'):
     """Insert a new processed file record."""
     conn.execute("INSERT OR REPLACE INTO processed_files (file_path, file_hash, status) VALUES (?, ?, ?)", (file_path, file_hash, status))
     conn.commit()
-    return conn.lastrowid
+    cursor = conn.execute("SELECT last_insert_rowid()")
+    row = cursor.fetchone()
+    return row[0] if row else None
 
 def get_all_processed_files(conn):
     """Get all processed files."""
@@ -182,7 +184,6 @@ def insert_transcript(conn, file_id, transcript, summary):
     """Insert a new transcript record."""
     conn.execute("INSERT INTO transcripts (file_id, transcript, summary) VALUES (?, ?, ?)", (file_id, transcript, summary))
     conn.commit()
-    return conn.lastrowid
 
 def get_all_transcripts(conn):
     """Get all transcripts."""
