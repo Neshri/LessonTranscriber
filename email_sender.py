@@ -16,6 +16,11 @@ import markdown
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
+import sqlite3
+
+# Database imports
+from database import init_db, is_summary_sent, insert_sent_summary, get_all_sent_summaries
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -246,32 +251,24 @@ def graph_send_email(subject: str, body: str, recipients: List[str], config: Ema
 class EmailSender:
     """Main email sender class for lesson summaries"""
 
-    def __init__(self, config: Optional[EmailConfig] = None, recipients: Optional[List[str]] = None):
+    def __init__(self, config: Optional[EmailConfig] = None, recipients: Optional[List[str]] = None, conn: Optional[sqlite3.Connection] = None, db_path: str = 'lesson_transcriber.db'):
         """
         Initialize the EmailSender.
 
         Args:
             config: Optional EmailConfig object, will load from env if not provided
             recipients: Optional list of recipient emails, overrides env var if provided
+            conn: Optional database connection, will initialize with db_path if not provided
+            db_path: Path to the SQLite database file (used only if conn not provided)
         """
         if config is None:
             config = load_config_from_env(recipients=recipients)
         self.config = config
-        self.sent_emails_file = Path("sent_emails.json")
-        self.sent_emails = self._load_sent_emails()
-
-    def _load_sent_emails(self) -> Dict[str, str]:
-        """Load tracking of sent emails"""
-        if self.sent_emails_file.exists():
-            try:
-                with open(self.sent_emails_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError):
-                logger.warning("Failed to load sent emails tracking, starting fresh")
-                return {}
-        return {}
-
-
+        self.db_path = db_path
+        if conn is not None:
+            self.conn = conn
+        else:
+            self.conn = init_db(db_path)
 
     def _generate_default_subject(self) -> str:
         """Generate a default Swedish subject line"""
@@ -301,15 +298,6 @@ class EmailSender:
             summary_only.append(line)
         return '\n'.join(summary_only).strip()
 
-
-    def _save_sent_emails(self):
-        """Save tracking of sent emails"""
-        try:
-            with open(self.sent_emails_file, 'w', encoding='utf-8') as f:
-                json.dump(self.sent_emails, f, indent=2)
-        except IOError as e:
-            logger.error(f"Failed to save sent emails tracking: {e}")
-
     def _get_file_hash(self, file_path: Path) -> str:
         """Generate SHA256 hash of file content"""
         try:
@@ -326,18 +314,13 @@ class EmailSender:
         file_hash = self._get_file_hash(summary_path)
         if file_hash is None:
             return False
-        return file_hash in self.sent_emails
+        return is_summary_sent(self.conn, file_hash)
 
     def _mark_summary_sent(self, summary_path: Path, summary_name: str):
         """Mark summary as sent"""
         file_hash = self._get_file_hash(summary_path)
         if file_hash:
-            self.sent_emails[file_hash] = {
-                'summary_name': summary_name,
-                'sent_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'file_path': str(summary_path)
-            }
-            self._save_sent_emails()
+            insert_sent_summary(self.conn, file_hash, summary_name, str(summary_path))
 
     def send_summary_email(self, summary_path: Path, subject: str = None) -> bool:
         """
@@ -513,11 +496,12 @@ Examples:
 
             elif choice == '3':
                 # Show sent summaries
-                if email_sender.sent_emails:
+                sent_summaries = get_all_sent_summaries(email_sender.conn)
+                if sent_summaries:
                     print("\nSent Summaries:")
                     print("===============")
-                    for hash_val, info in email_sender.sent_emails.items():
-                        print(f"- {info['summary_name']} (sent {info['sent_at']})")
+                    for summary in sent_summaries:
+                        print(f"- {summary[2]} (sent {summary[4]})")
                 else:
                     print("No sent summaries found")
             else:

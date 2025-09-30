@@ -14,6 +14,7 @@ import hashlib
 import argparse
 from pathlib import Path
 from email_sender import EmailSender
+from database import init_db, get_all_processed_files_hashes, insert_processed_file, get_file_hash_from_db, insert_transcript
 
 
 try:
@@ -72,11 +73,12 @@ except ImportError:
 
 
 class LessonTranscriber:
-    def __init__(self, config):
+    def __init__(self, config, conn):
         """
-        Initialize the transcriber with config dictionary
+        Initialize the transcriber with config dictionary and database connection
         """
         self.config = config
+        self.conn = conn
         self.whisper_model_name = config['whisper_model']
         self.ollama_url = config['ollama_url']
         self.ollama_model = config['ollama_model']
@@ -1004,9 +1006,10 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
         return final_summary
 
-    def process_lesson(self, audio_path, output_dir=None):
+    def process_lesson(self, audio_path, output_dir=None, file_id=None):
         """
         Process a lesson audio file: transcribe, summarize, and format.
+        If file_id is provided, insert transcript and summary into database.
         """
         logger.info(f"Starting process_lesson for {audio_path}")
         try:
@@ -1093,6 +1096,11 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 result["summary_file"] = str(summary_file)
                 logger.info(f"Results saved to {output_dir}")
 
+            # Insert transcript and summary into database if file_id is provided
+            if file_id is not None:
+                insert_transcript(self.conn, file_id, transcript, summary_content)
+                logger.info(f"Transcript and summary inserted into database for file_id {file_id}")
+
             logger.info("process_lesson completed successfully")
             return result
 
@@ -1116,30 +1124,15 @@ def get_audio_paths(source):
     else:
         raise ValueError(f"Invalid audio source: {source}. Must be a file or directory")
 
-def load_processed_files():
+def load_processed_files(conn):
     """
-    Load the set of processed file hashes from JSON file
+    Load the set of processed file hashes from database
     """
-    tracking_file = Path("processed_files.json")
-    if tracking_file.exists():
-        try:
-            with open(tracking_file, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            logger.warning("Failed to load processed files tracking, starting fresh")
-            return {}
-    return {}
-
-def save_processed_files(processed_files):
-    """
-    Save the set of processed file hashes to JSON file
-    """
-    tracking_file = Path("processed_files.json")
     try:
-        with open(tracking_file, 'w') as f:
-            json.dump(processed_files, f, indent=2)
-    except IOError as e:
-        logger.error(f"Failed to save processed files tracking: {e}")
+        return get_all_processed_files_hashes(conn)
+    except Exception as e:
+        logger.warning(f"Failed to load processed files from database: {e}, starting fresh")
+        return {}
 
 def get_file_hash(file_path):
     """
@@ -1154,15 +1147,15 @@ def get_file_hash(file_path):
     except (OSError, IOError):
         return None
 
-def is_file_processed(file_path, processed_files):
+def is_file_processed(conn, file_path):
     """
     Check if file has been processed by comparing hashes
     """
     file_hash = get_file_hash(file_path)
     if file_hash is None:
         return False  # Can't read file, consider unprocessed
-    expected_hash = processed_files.get(str(file_path))
-    return expected_hash == file_hash
+    stored_hash = get_file_hash_from_db(conn, str(file_path))
+    return stored_hash == file_hash
 
 
 def main():
@@ -1216,19 +1209,22 @@ Use Ctrl+C to stop monitoring.
         print("Please ensure config.json exists and is valid.")
         sys.exit(1)
 
+    # Initialize database
+    conn = init_db()
+
     # Initialize transcriber
     try:
-        transcriber = LessonTranscriber(config)
+        transcriber = LessonTranscriber(config, conn)
     except Exception as e:
         print(f"Failed to initialize transcriber: {e}")
         sys.exit(1)
 
     if monitor_mode:
         logger.info("Starting monitoring mode. Checking for new files every 5 seconds...")
-        processed_files = load_processed_files()
+        processed_files = load_processed_files(conn)
 
         # Initialize EmailSender once, before the loop starts
-        email_sender = EmailSender(recipients=config.get('email_recipients', []))
+        email_sender = EmailSender(recipients=config.get('email_recipients', []), conn=conn)
 
         try:
             while True:
@@ -1245,11 +1241,16 @@ Use Ctrl+C to stop monitoring.
 
                 new_files_processed = 0
                 for audio_path in current_audio_paths:
-                    if not is_file_processed(audio_path, processed_files):
+                    if not is_file_processed(conn, audio_path):
                         try:
                             logger.info(f"Processing new file: {audio_path}")
+                            # Insert processed file record and get file_id
+                            file_hash = get_file_hash(audio_path)
+                            file_id = None
+                            if file_hash:
+                                file_id = insert_processed_file(conn, str(audio_path), file_hash)
                             # Process the lesson
-                            result = transcriber.process_lesson(audio_path, output_dir="output")
+                            result = transcriber.process_lesson(audio_path, output_dir="output", file_id=file_id)
 
                             if result is None:
                                 logger.info(f"Skipped {audio_path} due to duration constraints, removing file")
@@ -1276,11 +1277,6 @@ Use Ctrl+C to stop monitoring.
                                 except Exception as e:
                                     logger.error(f"Failed to send email: {e}")
 
-                            # Update tracking
-                            file_hash = get_file_hash(audio_path)
-                            if file_hash:
-                                processed_files[str(audio_path)] = file_hash
-
                             new_files_processed += 1
 
                             print("\n" + "="*60)
@@ -1305,6 +1301,8 @@ Use Ctrl+C to stop monitoring.
 
                 if new_files_processed > 0:
                     logger.info(f"Processed {new_files_processed} new file(s) in this cycle")
+                    # Reload processed files to include newly processed ones
+                    processed_files = load_processed_files(conn)
 
                 # Send emails for any processed files that haven't been emailed yet
                 for file_path in processed_files:
@@ -1324,15 +1322,19 @@ Use Ctrl+C to stop monitoring.
 
         except KeyboardInterrupt:
             logger.info("Monitoring stopped by user")
-            save_processed_files(processed_files)
             print("Monitoring mode stopped.")
 
     else:
         # Batch processing mode
         for audio_path in audio_paths:
             try:
+                # Insert processed file record and get file_id
+                file_hash = get_file_hash(audio_path)
+                file_id = None
+                if file_hash:
+                    file_id = insert_processed_file(conn, str(audio_path), file_hash)
                 # Process the lesson
-                result = transcriber.process_lesson(audio_path, output_dir="output")
+                result = transcriber.process_lesson(audio_path, output_dir="output", file_id=file_id)
 
                 if result is None:
                     print(f"Skipped {audio_path} due to duration constraints")
