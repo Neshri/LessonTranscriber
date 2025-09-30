@@ -156,7 +156,6 @@ def insert_sent_summary(conn, file_hash, summary_name, file_path=None):
     """Insert a new sent summary record."""
     conn.execute("INSERT OR REPLACE INTO sent_summaries (file_hash, summary_name, file_path) VALUES (?, ?, ?)", (file_hash, summary_name, file_path))
     conn.commit()
-    return conn.lastrowid
 
 def get_all_sent_summaries(conn):
     """Get all sent summaries."""
