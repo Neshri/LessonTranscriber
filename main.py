@@ -1119,8 +1119,8 @@ def get_audio_paths(source):
     if os.path.isfile(source):
         return [os.path.abspath(source)]
     elif os.path.isdir(source):
-        supported_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg']
-        return [str(f.resolve()) for f in Path(source).glob("*") if f.is_file() and f.suffix.lower() in supported_extensions]
+        supported_extensions = ['.mp3']
+        return [str(f.resolve()) for f in Path(source).glob("*") if f.is_file() and f.suffix.lower() in supported_extensions and f.name.endswith('finished.mp3')]
     else:
         raise ValueError(f"Invalid audio source: {source}. Must be a file or directory")
 
