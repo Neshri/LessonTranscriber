@@ -136,8 +136,9 @@ class LessonTranscriber:
 
     def _parse_llm_output(self, llm_content: str) -> dict:
         """
-        Parses the raw LLM output, expecting a JSON object.
+        Parses the raw LLM output, extracting and validating the last valid JSON object.
         Returns a dictionary with 'subject' and 'summary' keys.
+        Falls back to plain text if no valid JSON is found.
         """
         if not isinstance(llm_content, str):
             return {
@@ -145,29 +146,36 @@ class LessonTranscriber:
                 'summary': str(llm_content)
             }
 
-        try:
-            # The model sometimes wraps the JSON in markdown code fences. Remove them.
-            if llm_content.strip().startswith("```json"):
-                llm_content = llm_content.strip()[7:-3].strip()
+        import re
 
-            data = json.loads(llm_content)
+        # Remove any leading/trailing markdown code fences
+        llm_content = re.sub(r'^```(?:json)?\s*', '', llm_content.strip())
+        llm_content = re.sub(r'```\s*$', '', llm_content)
 
-            subject = data.get('subject', self._generate_default_subject())
-            summary = data.get('summary', 'Sammanfattning saknas.')
+        # Find all simple JSON object substrings (non-greedy to avoid over-matching)
+        json_candidates = re.findall(r'\{.*?\}', llm_content, re.DOTALL)
 
-            if not subject:  # Handle empty string case
-                subject = self._generate_default_subject()
+        # Try to parse each candidate starting from the end (last in response)
+        for candidate in reversed(json_candidates):
+            try:
+                data = json.loads(candidate)
+                # Ensure required keys are present
+                if 'subject' in data and 'summary' in data:
+                    subject = data.get('subject', self._generate_default_subject())
+                    summary = data.get('summary', 'Sammanfattning saknas.')
+                    if not subject:
+                        subject = self._generate_default_subject()
+                    return {'subject': subject, 'summary': summary}
+            except json.JSONDecodeError:
+                continue  # Skip invalid JSON
 
-            return {'subject': subject, 'summary': summary}
-
-        except Exception as e:
-            logger.warning(f"LLM output parsing failed: {e}, treating as plain text")
-            logger.info(f"Raw LLM content that failed parsing: {repr(llm_content)}")
-            # Treat the raw content as plain text summary
-            return {
-                'subject': self._generate_default_subject(),
-                'summary': llm_content.strip()
-            }
+        logger.warning("LLM output does not contain valid JSON with required keys, treating as plain text")
+        logger.info(f"Raw LLM content that failed parsing: {repr(llm_content)}")
+        # Treat the raw content as plain text summary
+        return {
+            'subject': self._generate_default_subject(),
+            'summary': llm_content.strip()
+        }
 
         
     def _get_default_combine_prompt(self):
