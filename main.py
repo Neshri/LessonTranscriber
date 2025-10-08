@@ -1104,11 +1104,6 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 result["summary_file"] = str(summary_file)
                 logger.info(f"Results saved to {output_dir}")
 
-            # Insert transcript and summary into database if file_id is provided
-            if file_id is not None:
-                insert_transcript(self.conn, file_id, transcript, summary_content)
-                logger.info(f"Transcript and summary inserted into database for file_id {file_id}")
-
             logger.info("process_lesson completed successfully")
             return result
 
@@ -1252,13 +1247,18 @@ Use Ctrl+C to stop monitoring.
                     if not is_file_processed(conn, audio_path):
                         try:
                             logger.info(f"Processing new file: {audio_path}")
-                            # Insert processed file record and get file_id
-                            file_hash = get_file_hash(audio_path)
-                            file_id = None
-                            if file_hash:
-                                file_id = insert_processed_file(conn, str(audio_path), file_hash)
-                            # Process the lesson
-                            result = transcriber.process_lesson(audio_path, output_dir="output", file_id=file_id)
+                            # Process the lesson first
+                            result = transcriber.process_lesson(audio_path, output_dir="output", file_id=None)
+
+                            # Only mark as processed if processing completed successfully
+                            if result is not None:
+                                file_hash = get_file_hash(audio_path)
+                                if file_hash:
+                                    file_id = insert_processed_file(conn, str(audio_path), file_hash)
+                                    # Insert transcript and summary into database now that we have file_id
+                                    summary_content = result['summary'].split('\n\n', 1)[1] if '\n\n' in result['summary'] else result['summary']
+                                    insert_transcript(conn, file_id, result['transcript'], summary_content)
+                                    logger.info(f"File marked as processed and transcript inserted for: {audio_path}")
 
                             if result is None:
                                 logger.info(f"Skipped {audio_path} due to duration constraints, removing file")
@@ -1336,13 +1336,18 @@ Use Ctrl+C to stop monitoring.
         # Batch processing mode
         for audio_path in audio_paths:
             try:
-                # Insert processed file record and get file_id
-                file_hash = get_file_hash(audio_path)
-                file_id = None
-                if file_hash:
-                    file_id = insert_processed_file(conn, str(audio_path), file_hash)
-                # Process the lesson
-                result = transcriber.process_lesson(audio_path, output_dir="output", file_id=file_id)
+                # Process the lesson first
+                result = transcriber.process_lesson(audio_path, output_dir="output", file_id=None)
+
+                # Only mark as processed if processing completed successfully
+                if result is not None:
+                    file_hash = get_file_hash(audio_path)
+                    if file_hash:
+                        file_id = insert_processed_file(conn, str(audio_path), file_hash)
+                        # Insert transcript and summary into database now that we have file_id
+                        summary_content = result['summary'].split('\n\n', 1)[1] if '\n\n' in result['summary'] else result['summary']
+                        insert_transcript(conn, file_id, result['transcript'], summary_content)
+                        logger.info(f"File marked as processed and transcript inserted for: {audio_path}")
 
                 if result is None:
                     print(f"Skipped {audio_path} due to duration constraints")
