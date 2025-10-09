@@ -1366,6 +1366,11 @@ Use Ctrl+C to stop monitoring.
         sys.exit(1)
 
     if monitor_mode:
+        logger.warning("="*80)
+        logger.warning("*** MONITORING MODE: FILE REMOVAL IS CURRENTLY DISABLED ***")
+        logger.warning("*** FILES WILL BE DETECTED BUT NOT DELETED ***")
+        logger.warning("*** UNCOMMENT os.remove() IN main.py WHEN READY ***")
+        logger.warning("="*80)
         logger.info("Starting monitoring mode. Checking for new files every 5 seconds...")
         processed_files = load_processed_files(conn)
 
@@ -1404,12 +1409,11 @@ Use Ctrl+C to stop monitoring.
                                     logger.info(f"File marked as processed and transcript inserted for: {audio_path}")
 
                             if result is None:
-                                logger.info(f"Skipped {audio_path} due to audio quality constraints (volume), removing file")
-                                try:
-                                    os.remove(audio_path)
-                                    logger.info(f"Removed file: {audio_path}")
-                                except Exception as e:
-                                    logger.error(f"Failed to remove file {audio_path}: {e}")
+                                logger.warning(f"DETECTED PROBLEMATIC FILE: {audio_path}")
+                                logger.warning("*** FILE REMOVAL IS CURRENTLY DISABLED FOR SAFETY ***")
+                                logger.warning("*** FILE WOULD BE REMOVED: Audio volume constraints ***")
+                                logger.warning("*** UNCOMMENT os.remove() LINES WHEN READY TO DELETE ***")
+                                logger.info(f"File detected as problematic but preserved for testing: {audio_path}")
                                 continue
 
                             # Send summary email
