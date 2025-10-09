@@ -15,9 +15,9 @@
   "min_duration_minutes": 5,
   "max_duration_minutes": 180,
   "max_streaming_time_minutes": 5,
-  "silence_threshold_db": -40,
-  "max_silence_duration_seconds": 2.0,
-  "max_silence_percentage": 80,
+  "silence_threshold_db": -50,
+  "max_silence_duration_seconds": 1.0,
+  "max_silence_percentage": 15,
   "email_recipients": [
     "anton.lundgren94@gmail.com"
   ],
