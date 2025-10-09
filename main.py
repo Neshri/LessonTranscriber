@@ -99,7 +99,6 @@ class LessonTranscriber:
         self.max_streaming_time_minutes = config.get('max_streaming_time_minutes', 10)
         self.streaming_line_timeout_seconds = config.get('streaming_line_timeout_seconds', 30)
         self.min_audio_volume_db = config.get('min_audio_volume_db', -35)
-        self.min_audio_activity_score = config.get('min_audio_activity_score', 20)
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
@@ -460,7 +459,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 
             logger.info(f"Running audio activity detection on {audio_path}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
             if result.returncode != 0:
                 logger.warning(f"FFmpeg audio stats failed with return code {result.returncode}")
@@ -1162,22 +1161,18 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 logger.info(f"Skipping {audio_path} due to duration constraints")
                 return None  # Return None to indicate skipped file
 
-            # Check audio quality before processing
-            logger.info("Checking audio quality (activity and volume)")
+            # Check audio volume before processing (fast and effective)
+            logger.info("Checking audio volume")
 
-            # Check audio activity level (detects overall audio energy/activity)
-            activity_score = self.detect_audio_activity(audio_path)
-            if activity_score is not None and activity_score < self.min_audio_activity_score:
-                logger.info(f"Skipping {audio_path} due to low audio activity: {activity_score:.1f} activity score (threshold: {self.min_audio_activity_score})")
-                return None  # Return None to indicate skipped file
-
-            # Check audio volume (existing check)
             mean_volume_db = self.detect_audio_volume(audio_path)
-            if mean_volume_db is not None and mean_volume_db < self.min_audio_volume_db:
+            if mean_volume_db is None:
+                logger.warning(f"Audio volume detection failed for {audio_path}, skipping file")
+                return None  # Skip file if volume detection fails
+            if mean_volume_db < self.min_audio_volume_db:
                 logger.info(f"Skipping {audio_path} due to low audio volume: {mean_volume_db:.1f} dB (threshold: {self.min_audio_volume_db} dB)")
                 return None  # Return None to indicate skipped file
 
-            logger.info(f"Audio quality check passed: {activity_score:.1f} activity, {mean_volume_db:.1f} dB volume")
+            logger.info(f"Audio volume check passed: {mean_volume_db:.1f} dB volume")
             logger.info("Starting audio transcription")
             transcript = self.transcribe_audio(audio_path)
             logger.info(f"Transcription completed, length: {len(transcript)}")
@@ -1409,7 +1404,7 @@ Use Ctrl+C to stop monitoring.
                                     logger.info(f"File marked as processed and transcript inserted for: {audio_path}")
 
                             if result is None:
-                                logger.info(f"Skipped {audio_path} due to audio quality constraints (activity/volume), removing file")
+                                logger.info(f"Skipped {audio_path} due to audio quality constraints (volume), removing file")
                                 try:
                                     os.remove(audio_path)
                                     logger.info(f"Removed file: {audio_path}")
@@ -1498,7 +1493,7 @@ Use Ctrl+C to stop monitoring.
                         logger.info(f"File marked as processed and transcript inserted for: {audio_path}")
 
                 if result is None:
-                    print(f"Skipped {audio_path} due to audio quality constraints (activity/volume)")
+                    print(f"Skipped {audio_path} due to audio quality constraints (volume)")
                     continue
 
                 print("\n" + "="*60)

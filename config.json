@@ -16,7 +16,6 @@
   "max_duration_minutes": 180,
   "max_streaming_time_minutes": 5,
   "min_audio_volume_db": -35,
-  "min_audio_activity_score": 20,
   "email_recipients": [
     "anton.lundgren94@gmail.com"
   ],
