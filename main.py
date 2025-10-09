@@ -101,6 +101,7 @@ class LessonTranscriber:
         self.silence_threshold_db = config.get('silence_threshold_db', -40)
         self.max_silence_duration_seconds = config.get('max_silence_duration_seconds', 2.0)
         self.max_silence_percentage = config.get('max_silence_percentage', 80)
+        self.min_audio_volume_db = config.get('min_audio_volume_db', -35)
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
@@ -517,6 +518,51 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             return None
         except Exception as e:
             logger.warning(f"Error during silence detection: {e}")
+            return None
+
+    def detect_audio_volume(self, audio_path):
+        """
+        Detect the mean volume of audio file using ffmpeg volumedetect
+        Returns mean volume in dB if successful, None if failed
+        """
+        try:
+            import subprocess
+            import re
+
+            # Use ffmpeg volumedetect to analyze audio volume
+            cmd = [
+                'ffmpeg', '-i', audio_path, '-af', 'volumedetect',
+                '-f', 'null', '-'
+            ]
+
+            logger.info(f"Running volume detection on {audio_path}")
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+            if result.returncode != 0:
+                logger.warning(f"FFmpeg volumedetect failed with return code {result.returncode}")
+                return None
+
+            # Parse the output to find mean volume
+            stderr_output = result.stderr
+
+            # Look for mean_volume line
+            for line in stderr_output.split('\n'):
+                if 'mean_volume:' in line:
+                    match = re.search(r'mean_volume:\s*(-?\d+\.?\d*)\s*dB', line)
+                    if match:
+                        mean_volume = float(match.group(1))
+                        logger.info(f"Volume detection completed: {mean_volume:.1f} dB mean volume")
+                        return mean_volume
+
+            logger.warning("Could not find mean_volume in ffmpeg output")
+            return None
+
+        except subprocess.TimeoutExpired:
+            logger.warning("Volume detection timed out")
+            return None
+        except Exception as e:
+            logger.warning(f"Error during volume detection: {e}")
             return None
 
     def transcribe_audio(self, audio_path):
@@ -1111,12 +1157,21 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 return None  # Return None to indicate skipped file
 
             # Check for silence before processing
-            logger.info("Checking for silence in audio file")
+            logger.info("Checking audio quality (silence and volume)")
             silence_percentage = self.detect_silence(audio_path)
+
+            # Check silence threshold
             if silence_percentage is not None and silence_percentage > self.max_silence_percentage:
                 logger.info(f"Skipping {audio_path} due to high silence content: {silence_percentage:.1f}% silence (threshold: {self.max_silence_percentage}%)")
                 return None  # Return None to indicate skipped file
 
+            # Check audio volume
+            mean_volume_db = self.detect_audio_volume(audio_path)
+            if mean_volume_db is not None and mean_volume_db < self.min_audio_volume_db:
+                logger.info(f"Skipping {audio_path} due to low audio volume: {mean_volume_db:.1f} dB (threshold: {self.min_audio_volume_db} dB)")
+                return None  # Return None to indicate skipped file
+
+            logger.info(f"Audio quality check passed: {silence_percentage:.1f}% silence, {mean_volume_db:.1f} dB volume")
             logger.info("Starting audio transcription")
             transcript = self.transcribe_audio(audio_path)
             logger.info(f"Transcription completed, length: {len(transcript)}")
