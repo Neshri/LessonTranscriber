@@ -98,6 +98,9 @@ class LessonTranscriber:
         self.max_duration_minutes = config.get('max_duration_minutes', 180)
         self.max_streaming_time_minutes = config.get('max_streaming_time_minutes', 10)
         self.streaming_line_timeout_seconds = config.get('streaming_line_timeout_seconds', 30)
+        self.silence_threshold_db = config.get('silence_threshold_db', -40)
+        self.max_silence_duration_seconds = config.get('max_silence_duration_seconds', 2.0)
+        self.max_silence_percentage = config.get('max_silence_percentage', 80)
 
         logger.info(f"Loading Whisper model: {self.whisper_model_name}")
 
@@ -438,6 +441,83 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
         except Exception as e:
             logger.warning(f"Failed to check duration for {audio_path}: {e}")
             return True  # Allow processing if duration check fails
+
+    def detect_silence(self, audio_path):
+        """
+        Detect silence in audio file using ffmpeg silencedetect filter
+        Returns silence percentage (0-100) if successful, None if failed
+        """
+        try:
+            import subprocess
+            import re
+
+            # Use ffmpeg silencedetect to analyze audio
+            cmd = [
+                'ffmpeg', '-i', audio_path, '-af',
+                f'silencedetect=noise={self.silence_threshold_db}dB:duration={self.max_silence_duration_seconds}',
+                '-f', 'null', '-'
+            ]
+
+            logger.info(f"Running silence detection on {audio_path} with threshold {self.silence_threshold_db}dB and duration {self.max_silence_duration_seconds}s")
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+            if result.returncode != 0:
+                logger.warning(f"FFmpeg silencedetect failed with return code {result.returncode}")
+                return None
+
+            # Parse the output to find silence duration
+            stderr_output = result.stderr
+
+            # Look for silence_start and silence_end lines
+            silence_starts = []
+            silence_ends = []
+
+            for line in stderr_output.split('\n'):
+                if 'silence_start:' in line:
+                    match = re.search(r'silence_start:\s*(\d+\.?\d*)', line)
+                    if match:
+                        silence_starts.append(float(match.group(1)))
+                elif 'silence_end:' in line:
+                    match = re.search(r'silence_end:\s*(\d+\.?\d*)', line)
+                    if match:
+                        silence_ends.append(float(match.group(1)))
+
+            # Calculate total silence duration
+            total_silence = 0.0
+            for start, end in zip(silence_starts, silence_ends):
+                total_silence += (end - start)
+
+            # Get total audio duration using ffprobe
+            try:
+                probe_cmd = ['ffprobe', '-i', audio_path, '-show_entries', 'format=duration', '-v', 'quiet', '-of', 'csv=p=0']
+                probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+
+                if probe_result.returncode == 0:
+                    total_duration = float(probe_result.stdout.strip())
+                else:
+                    logger.warning("Could not determine audio duration for silence calculation")
+                    return None
+            except (subprocess.TimeoutExpired, ValueError, subprocess.CalledProcessError) as e:
+                logger.warning(f"Failed to get audio duration: {e}")
+                return None
+
+            if total_duration == 0:
+                logger.warning("Audio duration is 0, cannot calculate silence percentage")
+                return None
+
+            silence_percentage = (total_silence / total_duration) * 100
+
+            logger.info(f"Silence detection completed: {silence_percentage:.1f}% silence out of {total_duration:.1f}s total duration")
+
+            return silence_percentage
+
+        except subprocess.TimeoutExpired:
+            logger.warning("Silence detection timed out")
+            return None
+        except Exception as e:
+            logger.warning(f"Error during silence detection: {e}")
+            return None
 
     def transcribe_audio(self, audio_path):
         """
@@ -1028,6 +1108,13 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             # Check audio duration before processing
             if not self.check_audio_duration(audio_path):
                 logger.info(f"Skipping {audio_path} due to duration constraints")
+                return None  # Return None to indicate skipped file
+
+            # Check for silence before processing
+            logger.info("Checking for silence in audio file")
+            silence_percentage = self.detect_silence(audio_path)
+            if silence_percentage is not None and silence_percentage > self.max_silence_percentage:
+                logger.info(f"Skipping {audio_path} due to high silence content: {silence_percentage:.1f}% silence (threshold: {self.max_silence_percentage}%)")
                 return None  # Return None to indicate skipped file
 
             logger.info("Starting audio transcription")
