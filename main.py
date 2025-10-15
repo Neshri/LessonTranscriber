@@ -15,6 +15,7 @@ import argparse
 from pathlib import Path
 from email_sender import EmailSender
 from database import init_db, get_all_processed_files_hashes, insert_processed_file, get_file_hash_from_db, insert_transcript
+from lecture_detector import LectureDetector
 
 
 try:
@@ -79,6 +80,7 @@ class LessonTranscriber:
         """
         self.config = config
         self.conn = conn
+        self.detector = LectureDetector()  # For volume normalization before transcription
         self.whisper_model_name = config['whisper_model']
         self.ollama_url = config['ollama_url']
         self.ollama_model = config['ollama_model']
@@ -1173,8 +1175,22 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 return None  # Return None to indicate skipped file
 
             logger.info(f"Audio volume check passed: {mean_volume_db:.1f} dB volume")
+
+            # Volume normalization for better Whisper accuracy
+            logger.info("Checking if volume normalization is needed for Whisper accuracy")
+            normalized_audio_path = self.detector.normalize_audio_volume(
+                audio_path, target_volume_db=-20.0, output_folder="output"
+            )
+
+            # Use normalized file if it was created, otherwise use original
+            audio_to_transcribe = normalized_audio_path if normalized_audio_path else audio_path
+            if normalized_audio_path:
+                logger.info(f"Using normalized audio file for transcription: {normalized_audio_path}")
+            else:
+                logger.info("Audio volume already optimal, using original file for transcription")
+
             logger.info("Starting audio transcription")
-            transcript = self.transcribe_audio(audio_path)
+            transcript = self.transcribe_audio(audio_to_transcribe)
             logger.info(f"Transcription completed, length: {len(transcript)}")
 
             logger.info("Unloading Whisper models")

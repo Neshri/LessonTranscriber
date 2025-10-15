@@ -15,9 +15,8 @@ For testing different scenarios:
 3. Adjust thresholds in classify_as_lecture() method as needed
 4. Test with real microphone recordings when available
 
-Note: Trimming suggestions are MODERATELY sensitive for testing purposes.
-Triggers for forgotten recording scenarios (15min+ with 5min+ trailing silence).
-This helps test spliced files and moderate forgotten recording scenarios.
+Note: Volume normalization is available for accurate Whisper transcription.
+Trimming suggestions are commented out - ready for future implementation when needed.
 """
 
 import os
@@ -174,7 +173,6 @@ class LectureDetector:
                 volume_adjust_db = target_volume_db - current_volume
 
                 # Normalize using volume filter with re-encoding for compatibility
-                volume_adjust_db = target_volume_db - current_volume
                 volume_multiplier = 10 ** (volume_adjust_db / 20.0)
 
                 cmd = [
@@ -218,88 +216,89 @@ class LectureDetector:
             print(f"  ERROR: Volume normalization setup failed: {e}")
             return None
 
-    def detect_content_boundaries(self, audio_path, window_size_minutes=10):
-        """
-        Detect content boundaries using gap analysis between speech segments
-        For spliced files: looks for significant gaps that indicate splice points
-        """
-        try:
-            duration = self.get_audio_duration(audio_path)
-            if duration == 0 or duration < 600:  # Skip files shorter than 10 minutes
-                return None
+    # TODO: Re-enable this method for content boundary detection and trimming functionality in future
+    # def detect_content_boundaries(self, audio_path, window_size_minutes=10):
+    #     """
+    #     Detect content boundaries using gap analysis between speech segments
+    #     For spliced files: looks for significant gaps that indicate splice points
+    #     """
+    #     try:
+    #         duration = self.get_audio_duration(audio_path)
+    #         if duration == 0 or duration < 600:  # Skip files shorter than 10 minutes
+    #             return None
 
-            print(f"  Content boundary analysis (GAP DETECTION):")
+    #         print(f"  Content boundary analysis (GAP DETECTION):")
 
-            segments = self.detect_speech_segments(audio_path)
-            if not segments:
-                print("    - No speech segments found")
-                return None
+    #         segments = self.detect_speech_segments(audio_path)
+    #         if not segments:
+    #             print("    - No speech segments found")
+    #             return None
 
-            # NEW APPROACH: Find gaps between speech segments for spliced file detection
-            total_speech_time = sum(s['duration'] for s in segments if s['type'] == 'speech')
+    #         # NEW APPROACH: Find gaps between speech segments for spliced file detection
+    #         total_speech_time = sum(s['duration'] for s in segments if s['type'] == 'speech')
 
-            # Get only substantial speech segments (>30 seconds)
-            substantial_segments = [s for s in segments if s['type'] == 'speech' and s['duration'] > 30]
+    #         # Get only substantial speech segments (>30 seconds)
+    #         substantial_segments = [s for s in segments if s['type'] == 'speech' and s['duration'] > 30]
 
-            if len(substantial_segments) <= 1:
-                # Single or no substantial segments - check if file is much longer than content
-                if substantial_segments:
-                    single_segment = substantial_segments[0]
-                    segment_end = single_segment['end']
-                    if duration > segment_end + 180:  # File >3min longer than single content block
-                        suggested_trim = segment_end + 60
-                        print(f"    - SINGLE CONTENT BLOCK WITH LONG TRAILING")
-                        print(f"    - Content ends at: {segment_end/60:.1f} minutes")
-                        print(f"    - SUGGESTED TRIM POINT: {suggested_trim/60:.1f} minutes")
-                        print(f"    - Would save: {(duration - suggested_trim)/60:.1f} minutes")
+    #         if len(substantial_segments) <= 1:
+    #             # Single or no substantial segments - check if file is much longer than content
+    #             if substantial_segments:
+    #                 single_segment = substantial_segments[0]
+    #                 segment_end = single_segment['end']
+    #                 if duration > segment_end + 180:  # File >3min longer than single content block
+    #                     suggested_trim = segment_end + 60
+    #                     print(f"    - SINGLE CONTENT BLOCK WITH LONG TRAILING")
+    #                     print(f"    - Content ends at: {segment_end/60:.1f} minutes")
+    #                     print(f"    - SUGGESTED TRIM POINT: {suggested_trim/60:.1f} minutes")
+    #                     print(f"    - Would save: {(duration - suggested_trim)/60:.1f} minutes")
 
-                        return {
-                            'content_end': segment_end,
-                            'trailing_duration': duration - segment_end,
-                            'suggested_trim': suggested_trim,
-                            'confidence': 'high'
-                        }
-                print("    - No clear content boundaries detected")
-                return None
+    #                     return {
+    #                         'content_end': segment_end,
+    #                         'trailing_duration': duration - segment_end,
+    #                         'suggested_trim': suggested_trim,
+    #                         'confidence': 'high'
+    #                     }
+    #         print("    - No clear content boundaries detected")
+    #         return None
 
-            # Multiple substantial segments - look for largest gap (likely splice point)
-            substantial_segments.sort(key=lambda x: x['start'])
+    #         # Multiple substantial segments - look for largest gap (likely splice point)
+    #         substantial_segments.sort(key=lambda x: x['start'])
 
-            max_gap = 0
-            gap_position = 0
+    #         max_gap = 0
+    #         gap_position = 0
 
-            for i in range(len(substantial_segments) - 1):
-                gap_start = substantial_segments[i]['end']
-                gap_end = substantial_segments[i + 1]['start']
-                gap_duration = gap_end - gap_start
+    #         for i in range(len(substantial_segments) - 1):
+    #             gap_start = substantial_segments[i]['end']
+    #         gap_end = substantial_segments[i + 1]['start']
+    #         gap_duration = gap_end - gap_start
 
-                if gap_duration > max_gap:
-                    max_gap = gap_duration
-                    gap_position = gap_end
+    #         if gap_duration > max_gap:
+    #             max_gap = gap_duration
+    #             gap_position = gap_end
 
-            print(f"    - Largest gap between speech: {max_gap/60:.1f} minutes")
-            print(f"    - Gap ends at: {gap_position/60:.1f} minutes")
+    #     print(f"    - Largest gap between speech: {max_gap/60:.1f} minutes")
+    #     print(f"    - Gap ends at: {gap_position/60:.1f} minutes")
 
-            # Suggest trimming if there's a significant gap
-            if max_gap > 120:  # Gap > 2 minutes
-                suggested_trim = gap_position + 60  # Add buffer after gap
-                print(f"    - SPLICE POINT DETECTED")
-                print(f"    - SUGGESTED TRIM POINT: {suggested_trim/60:.1f} minutes")
-                print(f"    - Would save: {(duration - suggested_trim)/60:.1f} minutes")
+    #         # Suggest trimming if there's a significant gap
+    #     if max_gap > 120:  # Gap > 2 minutes
+    #         suggested_trim = gap_position + 60  # Add buffer after gap
+    #         print(f"    - SPLICE POINT DETECTED")
+    #         print(f"    - SUGGESTED TRIM POINT: {suggested_trim/60:.1f} minutes")
+    #         print(f"    - Would save: {(duration - suggested_trim)/60:.1f} minutes")
 
-                return {
-                    'splice_point': gap_position,
-                    'gap_duration': max_gap,
-                    'suggested_trim': suggested_trim,
-                    'confidence': 'high'
-                }
+    #         return {
+    #             'splice_point': gap_position,
+    #             'gap_duration': max_gap,
+    #             'suggested_trim': suggested_trim,
+    #             'confidence': 'high'
+    #         }
 
-            print("    - No significant gaps detected")
-            return None
+    #     print("    - No significant gaps detected")
+    #     return None
 
-        except Exception as e:
-            print(f"  ERROR: Content boundary detection failed: {e}")
-            return None
+    #     except Exception as e:
+    #         print(f"  ERROR: Content boundary detection failed: {e}")
+    #         return None
 
     def analyze_file(self, audio_path, normalize_volume=False, output_folder="output"):
         """Analyze a single audio file for lecture characteristics
@@ -349,8 +348,8 @@ class LectureDetector:
         print(f"  Speech time: {total_speech_time:.1f}s ({speech_percentage:.1f}%)")
         print(f"  Non-speech time: {total_silence_time:.1f}s ({100-speech_percentage:.1f}%)")
 
-        # Check for content boundaries (trimming suggestions)
-        boundary_info = self.detect_content_boundaries(audio_path)
+        # TODO: Re-enable content boundary detection for trimming functionality in future
+        # boundary_info = self.detect_content_boundaries(audio_path)
 
         # Rule-based classification
         is_lecture = self.classify_as_lecture(segments, duration, volume_db, speech_percentage)
@@ -505,32 +504,6 @@ class LectureDetector:
             normalized_count = sum(1 for r in results if r[2] is not None)
             print(f"Files normalized: {normalized_count}")
 
-        # Add threshold analysis
-        self.analyze_detection_thresholds()
-
-    def analyze_detection_thresholds(self):
-        """Analyze what types of files would pass/fail with different thresholds"""
-        print("\n" + "=" * 60)
-        print("THRESHOLD ANALYSIS")
-        print("=" * 60)
-
-        print("Current thresholds:")
-        print("  - Speech content: >30%")
-        print("  - Volume: > -40dB")
-        print("  - Content length: >2 minutes")
-        print("  - Duration: 3min-6hrs")
-        print("  - Silence: <60%")
-
-        print("\nSuggested test scenarios to try:")
-        print("  1. Very quiet educational content (-45dB)")
-        print("  2. Short educational snippet (2 minutes)")
-        print("  3. Test forgotten recording (8min+ with 1min+ trailing silence)")
-        print("  4. Recording with mixed speech/silence (40% speech)")
-        print("  5. Personal conversation (should be rejected)")
-        print("  6. Background noise only (should be rejected)")
- 
-        print("\nTo modify thresholds, edit classify_as_lecture() method")
-        print("To test specific thresholds, run with different audio files")
 
 
 def main():
