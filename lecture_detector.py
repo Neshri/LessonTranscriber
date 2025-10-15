@@ -133,6 +133,91 @@ class LectureDetector:
             print(f"  ERROR: Volume detection error for {audio_path}: {e}")
             return None
 
+    def normalize_audio_volume(self, audio_path, target_volume_db=-20.0, output_folder="output"):
+        """
+        Normalize audio volume to target level and save to output folder
+        Returns path to normalized file if successful, None if failed or no normalization needed
+        """
+        import tempfile
+        import shutil
+
+        try:
+            # Check current volume
+            current_volume = self.get_volume_info(audio_path)
+            if current_volume is None:
+                print(f"  ERROR: Cannot determine volume for {audio_path}")
+                return None
+
+            # Skip normalization if already within acceptable range
+            volume_diff = abs(current_volume - target_volume_db)
+            if volume_diff < 2.0:  # Within 2dB of target, no need to normalize
+                print(f"  SKIP: Volume {current_volume:.1f}dB already close to target {target_volume_db}dB")
+                return None
+
+            print(f"  NORMALIZING: {current_volume:.1f}dB to {target_volume_db}dB")
+
+            # Create output folder if it doesn't exist
+            output_dir = Path(output_folder)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generate output filename - use .m4a extension for AAC
+            base_name = Path(audio_path).stem
+            output_filename = f"{base_name}_normalized.m4a"
+            output_path = output_dir / output_filename
+
+            # Use temporary file during processing
+            with tempfile.NamedTemporaryFile(suffix='.m4a', delete=False) as temp_file:
+                temp_path = temp_file.name
+
+            try:
+                # Calculate volume adjustment needed
+                volume_adjust_db = target_volume_db - current_volume
+
+                # Normalize using volume filter with re-encoding for compatibility
+                volume_adjust_db = target_volume_db - current_volume
+                volume_multiplier = 10 ** (volume_adjust_db / 20.0)
+
+                cmd = [
+                    'ffmpeg', '-i', audio_path,
+                    '-af', f'volume={volume_multiplier}',
+                    '-c:a', 'aac',  # Re-encode to AAC for compatibility
+                    '-b:a', '128k',  # Set bitrate
+                    '-y', temp_path
+                ]
+
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5min timeout
+
+                if result.returncode == 0:
+                    # Move temp file to final location
+                    shutil.move(temp_path, output_path)
+                    print(f"  SUCCESS: Normalized audio saved to {output_path}")
+                    return str(output_path)
+                else:
+                    print(f"  ERROR: ffmpeg normalization failed")
+                    print(f"  Command: {' '.join(cmd)}")
+                    print(f"  Return code: {result.returncode}")
+                    if result.stderr:
+                        print(f"  stderr: {result.stderr[-500:]}")  # Last 500 chars
+                    return None
+
+            except subprocess.TimeoutExpired:
+                print(f"  TIMEOUT: Volume normalization timed out for {audio_path}")
+                return None
+            except Exception as e:
+                print(f"  ERROR: Volume normalization failed: {e}")
+                return None
+            finally:
+                # Clean up temp file if it still exists
+                try:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                except:
+                    pass
+
+        except Exception as e:
+            print(f"  ERROR: Volume normalization setup failed: {e}")
+            return None
+
     def detect_content_boundaries(self, audio_path, window_size_minutes=10):
         """
         Detect content boundaries using gap analysis between speech segments
@@ -216,8 +301,18 @@ class LectureDetector:
             print(f"  ERROR: Content boundary detection failed: {e}")
             return None
 
-    def analyze_file(self, audio_path):
-        """Analyze a single audio file for lecture characteristics"""
+    def analyze_file(self, audio_path, normalize_volume=False, output_folder="output"):
+        """Analyze a single audio file for lecture characteristics
+
+        Args:
+            audio_path: Path to audio file to analyze
+            normalize_volume: If True, normalize volume and return normalized file path
+            output_folder: Folder to save normalized files
+
+        Returns:
+            If normalize_volume=False: Boolean indicating if file is educational content
+            If normalize_volume=True: Tuple of (is_educational, normalized_file_path)
+        """
         filename = os.path.basename(audio_path)
         print(f"\nAnalyzing: {filename}")
 
@@ -225,6 +320,8 @@ class LectureDetector:
         duration = self.get_audio_duration(audio_path)
         if duration == 0:
             print("  ERROR: Could not determine duration")
+            if normalize_volume:
+                return False, None
             return False
 
         print(f"  Duration: {duration:.1f} seconds ({duration/60:.1f} minutes)")
@@ -240,6 +337,8 @@ class LectureDetector:
         segments = self.detect_speech_segments(audio_path)
         if segments is None:
             print("  ERROR: Could not analyze segments")
+            if normalize_volume:
+                return False, None
             return False
 
         # Analyze segments
@@ -254,7 +353,27 @@ class LectureDetector:
         boundary_info = self.detect_content_boundaries(audio_path)
 
         # Rule-based classification
-        return self.classify_as_lecture(segments, duration, volume_db, speech_percentage)
+        is_lecture = self.classify_as_lecture(segments, duration, volume_db, speech_percentage)
+
+        # Optional volume normalization
+        normalized_path = None
+        if normalize_volume and is_lecture:
+            # Only normalize educational content
+            normalized_path = self.normalize_audio_volume(audio_path, output_folder=output_folder)
+            if normalized_path:
+                print(f"  VOLUME NORMALIZED: {normalized_path}")
+
+        if normalize_volume:
+            return is_lecture, normalized_path
+        return is_lecture
+
+    def process_and_normalize_file(self, audio_path, output_folder="output"):
+        """Process file and create normalized version if it's educational content
+
+        Returns:
+            Tuple of (is_educational, normalized_path_or_none)
+        """
+        return self.analyze_file(audio_path, normalize_volume=True, output_folder=output_folder)
 
     def classify_as_lecture(self, segments, duration, volume_db, speech_percentage):
         """
@@ -321,9 +440,16 @@ class LectureDetector:
 
         return is_lecture
 
-    def test_all_files(self):
-        """Test all audio files in the lesson_audio folder"""
+    def test_all_files(self, normalize_volume=False, output_folder="output"):
+        """Test all audio files in the lesson_audio folder
+
+        Args:
+            normalize_volume: If True, normalize volume of educational content
+            output_folder: Folder to save normalized files
+        """
         print("Starting Lecture Detection Test")
+        if normalize_volume:
+            print("WITH VOLUME NORMALIZATION ENABLED")
         print("=" * 50)
 
         if not os.path.exists(self.audio_folder):
@@ -347,8 +473,12 @@ class LectureDetector:
         results = []
 
         for audio_path in audio_files:
-            is_lecture = self.analyze_file(str(audio_path))
-            results.append((audio_path.name, is_lecture))
+            if normalize_volume:
+                is_lecture, normalized_path = self.process_and_normalize_file(str(audio_path), output_folder=output_folder)
+                results.append((audio_path.name, is_lecture, normalized_path))
+            else:
+                is_lecture = self.analyze_file(str(audio_path))
+                results.append((audio_path.name, is_lecture, None))
 
         # Summary
         print("\n" + "=" * 50)
@@ -359,14 +489,21 @@ class LectureDetector:
         non_lectures = [r for r in results if not r[1]]
 
         print(f"Educational Content: {len(lectures)}")
-        for name, _ in lectures:
-            print(f"   • {name}")
+        for name, _, normalized_path in lectures:
+            status = ""
+            if normalized_path:
+                status = " (NORMALIZED)"
+            print(f"   • {name}{status}")
 
         print(f"Non-educational: {len(non_lectures)}")
-        for name, _ in non_lectures:
+        for name, _, _ in non_lectures:
             print(f"   • {name}")
 
         print(f"\nTotal: {len(results)} files analyzed")
+
+        if normalize_volume:
+            normalized_count = sum(1 for r in results if r[2] is not None)
+            print(f"Files normalized: {normalized_count}")
 
         # Add threshold analysis
         self.analyze_detection_thresholds()
@@ -391,14 +528,25 @@ class LectureDetector:
         print("  4. Recording with mixed speech/silence (40% speech)")
         print("  5. Personal conversation (should be rejected)")
         print("  6. Background noise only (should be rejected)")
-
+ 
         print("\nTo modify thresholds, edit classify_as_lecture() method")
         print("To test specific thresholds, run with different audio files")
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Lecture Detection with Optional Volume Normalization')
+    parser.add_argument('--normalize', action='store_true',
+                       help='Enable volume normalization for educational content')
+    parser.add_argument('--output', default='output',
+                       help='Output folder for normalized files (default: output)')
+
+    # Parse known args to allow running without arguments
+    args, unknown = parser.parse_known_args()
+
     detector = LectureDetector()
-    detector.test_all_files()
+    detector.test_all_files(normalize_volume=args.normalize, output_folder=args.output)
 
 
 if __name__ == "__main__":

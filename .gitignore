@@ -4,6 +4,7 @@ __pycache__/
 *.wav
 *.pt
 *.bin
+/output
 sent_emails.json
 .env
 processed_files.json
