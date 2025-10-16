@@ -357,11 +357,15 @@ class EmailSender:
 
             # Look for the confidence score in the full content
             if "---Confidence Score:" in summary_content:
-                confidence_lines = summary_content.split("---Confidence Score:")[1].split('\n')
-                if confidence_lines:
-                    confidence_part = confidence_lines[0].strip()
-                    confidence_score = confidence_part.split()[0]  # Get the numeric value
+                # Get everything after the last confidence marker
+                after_marker = summary_content.split("---Confidence Score:")[-1].strip()
+                # Extract just the numeric value from the first line
+                first_line = after_marker.split('\n')[0].strip()
+                if first_line:
+                    confidence_score = first_line.split()[0]  # Get the numeric value
                     logger.debug(f"Found confidence score: {confidence_score}")
+                else:
+                    logger.debug("Confidence score line is empty")
             else:
                 logger.debug("Confidence score marker not found in summary_content")
 

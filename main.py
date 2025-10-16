@@ -1333,7 +1333,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             # Step 6: Create the text file for saving
             logger.info("Creating output files")
             # Include subject and confidence score in file for later email extraction
-            final_output_for_file = f"{timestamped_summary}\n\n---Subject:\n{subject}\n\n---Confidence Score:\n{confidence_score:.3f} (Avg LogProb: {avg_logprob:.3f}, No Speech Prob: {no_speech_prob:.3f})"
+            final_output_for_file = f"{timestamped_summary}\n\n---Subject:\n{subject}\n\n---Confidence Score:\n{confidence_score:.3f}"
 
             if output_dir:
                 transcript_file = Path(output_dir) / f"{base_name}_transcript.txt"
