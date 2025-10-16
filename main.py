@@ -13,6 +13,7 @@ from datetime import datetime
 import hashlib
 import argparse
 from pathlib import Path
+import re
 from email_sender import EmailSender
 from database import init_db, get_all_processed_files_hashes, insert_processed_file, get_file_hash_from_db, insert_transcript
 from lecture_detector import LectureDetector
@@ -137,6 +138,23 @@ class LessonTranscriber:
         """Generate a default Swedish subject line"""
         return "Lektionssammanfattning"
 
+    def _repair_json_candidate(self, candidate: str) -> str:
+        """
+        Attempt to repair common JSON formatting issues in LLM output.
+        """
+        # Fix unescaped newlines in summary field by escaping them
+        # Look for "summary": "..." and escape newlines within the quotes
+        def escape_newlines_in_summary(match):
+            content = match.group(1)
+            # Escape newlines and other problematic characters
+            content = content.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            return f'"summary": "{content}"'
+
+        # Regex to match summary field with unescaped content
+        candidate = re.sub(r'"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', escape_newlines_in_summary, candidate, flags=re.DOTALL)
+
+        return candidate
+
     def _parse_llm_output(self, llm_content: str) -> dict:
         """
         Parses the raw LLM output, extracting and validating the last valid JSON object.
@@ -149,8 +167,6 @@ class LessonTranscriber:
                 'summary': str(llm_content)
             }
 
-        import re
-
         # Remove any leading/trailing markdown code fences
         llm_content = re.sub(r'^```(?:json)?\s*', '', llm_content.strip())
         llm_content = re.sub(r'```\s*$', '', llm_content)
@@ -160,8 +176,11 @@ class LessonTranscriber:
 
         # Try to parse each candidate starting from the end (last in response)
         for candidate in reversed(json_candidates):
+            # Try to repair common JSON formatting issues
+            repaired_candidate = self._repair_json_candidate(candidate)
+
             try:
-                data = json.loads(candidate)
+                data = json.loads(repaired_candidate)
                 # Ensure required keys are present
                 if 'subject' in data and 'summary' in data:
                     subject = data.get('subject', self._generate_default_subject())
