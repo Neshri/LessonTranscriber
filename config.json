@@ -2,13 +2,19 @@
   "whisper_model": "KBLab/kb-whisper-large",
   "ollama_model": "gpt-oss:20b",
   "ollama_url": "http://127.0.0.1:11434",
-  "summarization_prompt_template": "Du är en svenskspråkig AI-assistent vars enda funktion är att skapa ett JSON-objekt som sammanfattar en given text. Du svarar ALLTID på svenska.\n\nAnalysera TEXTEN nedan. Korrigera eventuella fel från den AI-genererade transkriptionen. Skapa sedan ett JSON-objekt som följer reglerna beskrivna i exemplet.\n\nSvara ENDAST med det färdiga JSON-objektet.\n\n**TEXT:**\n{transcript}\n\n**JSON-OBJEKT MED REGLER:**\n```json\n{{\n  \"subject\": \"En kort, beskrivande ämnesrad (3-6 ord)\",\n  \"summary\": \"En enda JSON-sträng som innehåller en punktlista (6–8 punkter). Varje punkt måste börja med ett bindestreck (-) och separeras med ett radbrytetecken (\\n). Använd korrekta Unicode-tecken för ALLA specialtecken och exponenter (t.ex. R², Rⁿ, π).\"\n}}\n```",
-  "chunk_summarization_prompt_template": "Du är en svenskspråkig AI-assistent som endast sammanfattar text. Svara ALLTID på svenska.\n\nSammanfatta följande textavsnitt till max 4–5 punkter. Varje punkt ska börja med ett bindestreck (-). Svara endast med den färdiga punktlistan.\n\n**TEXTAVSNITT:**\n{transcript}",
-  "combine_summaries_prompt_template": "Du är en svenskspråkig AI-assistent vars enda funktion är att skapa ett JSON-objekt som sammanfattar en given text. Du svarar ALLTID på svenska.\n\nSyntetisera TEXTDELARNA nedan till en enhetlig sammanfattning. Skapa sedan ett JSON-objekt som följer reglerna beskrivna i exemplet.\n\nSvara ENDAST med det färdiga JSON-objektet.\n\n**TEXTDELAR:**\n{chunk_summaries}\n\n**JSON-OBJEKT MED REGLER:**\n```json\n{{\n  \"subject\": \"En kort, övergripande ämnesrad (3-6 ord)\",\n  \"summary\": \"En enda JSON-sträng som innehåller en punktlista (8–10 punkter). Varje punkt måste börja med ett bindestreck (-) och separeras med ett radbrytetecken (\\n). Använd korrekta Unicode-tecken för ALLA specialtecken och exponenter (t.ex. R², Rⁿ, π).\"\n}}\n```",
+
+  "summarization_prompt_template": "Du är en svenskspråkig AI-assistent som sammanfattar lektionstranskriptioner inom IT, teknik och nätverk. Texten kan innehålla spontant tal, felsägningar och engelska termer. Ditt mål är att skapa en tekniskt korrekt, kortfattad och språkligt flytande sammanfattning.\n\nAnalysera TEXTEN nedan, rätta uppenbara transkriptionsfel utan att ändra betydelsen, och skapa sedan ett JSON-objekt enligt exemplen.\n\nSvara ENDAST med det färdiga JSON-objektet.\n\n**TEXT:**\n{transcript}\n\n**JSON-OBJEKT MED REGLER:**\n```json\n{{\n  \"subject\": \"En kort, beskrivande ämnesrad (3–6 ord)\",\n  \"summary\": \"En enda JSON-sträng som innehåller en punktlista (6–8 punkter). Varje punkt börjar med ett bindestreck (-) och separeras med ett radbrytetecken (\\n). Fokusera på tekniska händelser, kommandon, problem och lösningar. Undvik utfyllnad och irrelevanta detaljer.\"\n}}\n```",
+
+  "chunk_summarization_prompt_template": "Du är en svenskspråkig AI-assistent som sammanfattar textavsnitt från svenska lektioner inom IT, teknik och nätverk. Texten kan vara oredigerad och innehålla engelska ord.\n\nSammanfatta följande textavsnitt till högst 4–5 punkter. Varje punkt ska börja med ett bindestreck (-). Fokusera på tekniska moment, åtgärder, fel och förklaringar. Hoppa över upprepningar och småprat.\n\n**TEXTAVSNITT:**\n{transcript}",
+
+  "combine_summaries_prompt_template": "Du är en svenskspråkig AI-assistent som syntetiserar flera del-sammanfattningar till en enhetlig slutversion. Texten gäller IT-, nätverks- eller tekniklektioner.\n\nKombinera TEXTDELARNA nedan till en logisk helhet och skapa ett JSON-objekt enligt reglerna. Om delarna innehåller IT-relaterat innehåll (t.ex. DHCP, DNS, Hyper-V, Active Directory) ska dessa termer användas korrekt. Undvik att hitta på nya ämnen.\n\nSvara ENDAST med det färdiga JSON-objektet.\n\n**TEXTDELAR:**\n{chunk_summaries}\n\n**JSON-OBJEKT MED REGLER:**\n```json\n{{\n  \"subject\": \"En kort, övergripande ämnesrad (3–6 ord)\",\n  \"summary\": \"En enda JSON-sträng som innehåller en punktlista (8–10 punkter). Varje punkt börjar med ett bindestreck (-) och separeras med ett radbrytetecken (\\n). Inkludera viktiga steg, resultat och slutsatser.\"\n}}\n```",
+
+  "confidence": "Ett värde mellan 0.0–1.0 som uppskattar hur säker modellen är på sammanfattningen. 1.0 = mycket säker, 0.0 = osäker. Värdet beräknas baserat på ljudkvalitet, transkriptionsnoggrannhet och sammanfattningens koherens.",
+
   "max_summary_length": 3000,
   "gpu_device": "auto",
   "chunk_size_mb": 10,
-  "max_context_tokens": 4096,
+  "max_context_tokens": 10000,
   "overlap_tokens": 200,
   "context_margin": 1000,
   "chunk_context_overhead": 500,
@@ -16,6 +22,7 @@
   "max_duration_minutes": 180,
   "max_streaming_time_minutes": 5,
   "min_audio_volume_db": -35,
+
   "email_recipients": [
     "anton.lundgren94@gmail.com"
   ],

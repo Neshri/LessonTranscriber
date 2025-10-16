@@ -181,6 +181,52 @@ class LessonTranscriber:
         }
 
         
+    def _calculate_confidence_score(self, avg_logprob, no_speech_prob, transcript, summary):
+        """
+        Calculate confidence score for summary reliability based on Whisper metrics and semantic density.
+
+        Args:
+            avg_logprob: Average log probability from Whisper (-inf to 0, higher is better)
+            no_speech_prob: Average no-speech probability from Whisper (0-1, lower is better)
+            transcript: Original transcript text
+            summary: Generated summary text
+
+        Returns:
+            float: Confidence score between 0.0 and 1.0
+        """
+        # Normalize avg_logprob to 0-1 range (logprob should be around -2 for good audio, -0.5 for very good)
+        # Convert to score where higher logprob gives higher confidence
+        if avg_logprob < -10:  # Very poor audio
+            logprob_score = 0.0
+        elif avg_logprob > 0:  # Shouldn't happen but handle gracefully
+            logprob_score = 1.0
+        else:
+            # Normalize -10 to 0 range to 0-1 (good range for logprob is -2 to -0.5)
+            logprob_score = max(0.0, min(1.0, (avg_logprob + 10) / 10))
+
+        # No-speech probability score (lower is better)
+        speech_score = 1.0 - no_speech_prob
+
+        # Semantic density: ratio of unique words in summary vs transcript (higher ratio = more dense = better summary)
+        transcript_words = set(transcript.lower().split())
+        summary_words = set(summary.lower().split())
+
+        if transcript_words:
+            density = len(summary_words.intersection(transcript_words)) / len(transcript_words)
+            density_score = min(1.0, density * 2)  # Cap at 1.0, boost slightly
+        else:
+            density_score = 0.0
+
+        # Weighted average as specified
+        confidence = (logprob_score * 0.5) + (speech_score * 0.2) + (density_score * 0.3)
+
+        # Clamp to [0.0, 1.0]
+        confidence = max(0.0, min(1.0, confidence))
+
+        logger.info(f"Confidence calculation: logprob_score={logprob_score:.3f}, speech_score={speech_score:.3f}, density_score={density_score:.3f}, final_confidence={confidence:.3f}")
+
+        return confidence
+
     def _get_default_combine_prompt(self):
         """Get default combine summaries prompt if not in config, ensuring it uses JSON format."""
         return """Du är en expertredaktör. Syntetisera textdelarna nedan. Ditt svar måste vara ett giltigt JSON-objekt.
@@ -575,6 +621,7 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
     def transcribe_audio(self, audio_path):
         """
         Transcribe the audio file using Whisper
+        Returns a dictionary with 'transcript', 'avg_logprob', and 'no_speech_prob'
         """
         self.validate_audio_file(audio_path)
         logger.info(f"Transcribing audio file: {audio_path}")
@@ -598,13 +645,26 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                     # Using standard openai-whisper
                     result = self.whisper_model.transcribe(audio_path)
                     transcript = result["text"].strip()
+                    # Extract metrics from standard whisper result
+                    avg_logprob = result.get('avg_logprob', -1.0)  # Default to -1.0 if not available
+                    no_speech_prob = result.get('no_speech_prob', 0.0)  # Default to 0.0 if not available
                 elif hasattr(self, 'use_faster_whisper') and self.use_faster_whisper:
                     # Using faster-whisper
                     segments, info = self.whisper_model.transcribe(audio_path, beam_size=5)
                     logger.info(f"Detected language '{info.language}' with probability {info.language_probability:.2f}")
                     transcript = " ".join([segment.text for segment in segments]).strip()
+
+                    # Calculate average metrics from segments
+                    if segments:
+                        avg_logprob = sum(segment.avg_logprob for segment in segments) / len(segments)
+                        no_speech_prob = sum(segment.no_speech_prob for segment in segments) / len(segments)
+                    else:
+                        avg_logprob = -1.0
+                        no_speech_prob = 0.0
+
+                    logger.info(f"Transcription metrics: avg_logprob={avg_logprob:.3f}, no_speech_prob={no_speech_prob:.3f}")
                 else:
-                    # Using Hugging Face pipeline - enable timestamps for long audio
+                    # Using Hugging Face pipeline - metrics not available
                     result = self.pipe(audio_path, return_timestamps=True)
                     if isinstance(result, dict) and "text" in result:
                         transcript = result["text"].strip()
@@ -614,9 +674,16 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                         transcript = transcript.strip()
                     else:
                         transcript = str(result).strip()
+                    # Metrics not available for Hugging Face
+                    avg_logprob = -1.0
+                    no_speech_prob = 0.0
 
                 logger.info(f"Transcription completed successfully ({len(transcript)} characters)")
-                return transcript
+                return {
+                    'transcript': transcript,
+                    'avg_logprob': avg_logprob,
+                    'no_speech_prob': no_speech_prob
+                }
             except Exception as e:
                 logger.warning(f"Transcription attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
@@ -1190,8 +1257,11 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 logger.info("Audio volume already optimal, using original file for transcription")
 
             logger.info("Starting audio transcription")
-            transcript = self.transcribe_audio(audio_to_transcribe)
-            logger.info(f"Transcription completed, length: {len(transcript)}")
+            transcription_result = self.transcribe_audio(audio_to_transcribe)
+            transcript = transcription_result['transcript']
+            avg_logprob = transcription_result['avg_logprob']
+            no_speech_prob = transcription_result['no_speech_prob']
+            logger.info(f"Transcription completed, length: {len(transcript)}, avg_logprob: {avg_logprob:.3f}, no_speech_prob: {no_speech_prob:.3f}")
 
             logger.info("Unloading Whisper models")
             if self.use_standard_whisper and self.whisper_model is not None:
@@ -1222,6 +1292,11 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             summary_content = parsed_data['summary']
             logger.info(f"Extracted subject: {repr(subject)}, summary length: {len(summary_content)}")
 
+            # Step 2.5: Calculate confidence score
+            logger.info("Calculating confidence score")
+            confidence_score = self._calculate_confidence_score(avg_logprob, no_speech_prob, transcript, summary_content)
+            logger.info(f"Confidence score calculated: {confidence_score:.3f}")
+
             # Step 3: Programmatically get the timestamp
             logger.info("Retrieving file timestamp")
             try:
@@ -1244,13 +1319,18 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                 "audio_file": audio_path,
                 "transcript": transcript,
                 "subject": subject,
-                "summary": timestamped_summary
+                "summary": timestamped_summary,
+                "confidence": confidence_score,
+                "whisper_metrics": {
+                    "avg_logprob": avg_logprob,
+                    "no_speech_prob": no_speech_prob
+                }
             }
 
             # Step 6: Create the text file for saving
             logger.info("Creating output files")
-            # Include subject in file for later email extraction
-            final_output_for_file = f"{timestamped_summary}\n\n---Subject:\n{subject}"
+            # Include subject and confidence score in file for later email extraction
+            final_output_for_file = f"{timestamped_summary}\n\n---Subject:\n{subject}\n\n---Confidence Score:\n{confidence_score:.3f} (Avg LogProb: {avg_logprob:.3f}, No Speech Prob: {no_speech_prob:.3f})"
 
             if output_dir:
                 transcript_file = Path(output_dir) / f"{base_name}_transcript.txt"
@@ -1454,6 +1534,7 @@ Use Ctrl+C to stop monitoring.
                             print(f"LESSON TRANSCRIPTION SUMMARY ({Path(audio_path).name})")
                             print("="*60)
                             print(f"Audio File: {result['audio_file']}")
+                            print(f"Confidence Score: {result['confidence']:.3f}")
                             if 'transcript_file' in result:
                                 print(f"Transcript: {result['transcript_file']}")
                                 print(f"Summary: {result['summary_file']}")
@@ -1520,6 +1601,7 @@ Use Ctrl+C to stop monitoring.
                 print(f"LESSON TRANSCRIPTION SUMMARY ({Path(audio_path).name})")
                 print("="*60)
                 print(f"Audio File: {result['audio_file']}")
+                print(f"Confidence Score: {result['confidence']:.3f}")
                 if 'transcript_file' in result:
                     print(f"Transcript: {result['transcript_file']}")
                     print(f"Summary: {result['summary_file']}")
