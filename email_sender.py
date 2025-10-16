@@ -290,19 +290,8 @@ class EmailSender:
 
     def _get_cleaned_summary(self, content: str) -> str:
         """Extract summary body from plain text content, including confidence score"""
-        lines = content.split('\n')
-        summary_only = []
-        subject_found = False
-
-        for line in lines:
-            if line.strip() == '---Subject:':
-                subject_found = True
-                break
-            summary_only.append(line)
-
-        # Include everything up to and including the confidence score section
-        result = '\n'.join(summary_only).strip()
-        return result
+        # Return everything - the confidence score should be part of the content
+        return content.strip()
 
     def _get_file_hash(self, file_path: Path) -> str:
         """Generate SHA256 hash of file content"""
@@ -364,12 +353,17 @@ class EmailSender:
 
             # Extract confidence score for display
             confidence_score = "N/A"
-            lines = summary_body.split('\n')
-            for line in lines:
-                if line.strip().startswith("---Confidence Score:"):
-                    confidence_part = line.split(":", 1)[1].strip()
+            logger.debug(f"Looking for confidence score in summary_content: {summary_content[:300]}...")
+
+            # Look for the confidence score in the full content
+            if "---Confidence Score:" in summary_content:
+                confidence_lines = summary_content.split("---Confidence Score:")[1].split('\n')
+                if confidence_lines:
+                    confidence_part = confidence_lines[0].strip()
                     confidence_score = confidence_part.split()[0]  # Get the numeric value
-                    break
+                    logger.debug(f"Found confidence score: {confidence_score}")
+            else:
+                logger.debug("Confidence score marker not found in summary_content")
 
             # Format body as HTML with confidence score
             body = f"""
