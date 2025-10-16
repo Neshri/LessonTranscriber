@@ -164,6 +164,11 @@ class LectureDetector:
             output_filename = f"{base_name}_normalized.m4a"
             output_path = output_dir / output_filename
 
+            # Check if normalized file already exists
+            if output_path.exists():
+                print(f"  SKIP: Normalized file already exists: {output_path}")
+                return str(output_path)
+
             # Use temporary file during processing
             with tempfile.NamedTemporaryFile(suffix='.m4a', delete=False) as temp_file:
                 temp_path = temp_file.name
