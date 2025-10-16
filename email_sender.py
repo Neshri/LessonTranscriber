@@ -292,26 +292,16 @@ class EmailSender:
         """Extract summary body from plain text content, including confidence score"""
         lines = content.split('\n')
         summary_only = []
-        confidence_lines = []
-        in_confidence_section = False
+        subject_found = False
 
         for line in lines:
             if line.strip() == '---Subject:':
+                subject_found = True
                 break
-            elif line.strip() == '---Confidence Score:':
-                in_confidence_section = True
-                confidence_lines.append(line)
-            elif in_confidence_section:
-                confidence_lines.append(line)
-            else:
-                summary_only.append(line)
+            summary_only.append(line)
 
-        # Combine summary with confidence information
+        # Include everything up to and including the confidence score section
         result = '\n'.join(summary_only).strip()
-        if confidence_lines:
-            confidence_text = '\n'.join(confidence_lines).strip()
-            result = f"{result}\n\n{confidence_text}"
-
         return result
 
     def _get_file_hash(self, file_path: Path) -> str:
@@ -374,9 +364,12 @@ class EmailSender:
 
             # Extract confidence score for display
             confidence_score = "N/A"
-            if "---Confidence Score:" in summary_body:
-                confidence_part = summary_body.split("---Confidence Score:")[1].split("\n")[0].strip()
-                confidence_score = confidence_part.split()[0]  # Get the numeric value
+            lines = summary_body.split('\n')
+            for line in lines:
+                if line.strip().startswith("---Confidence Score:"):
+                    confidence_part = line.split(":", 1)[1].strip()
+                    confidence_score = confidence_part.split()[0]  # Get the numeric value
+                    break
 
             # Format body as HTML with confidence score
             body = f"""
