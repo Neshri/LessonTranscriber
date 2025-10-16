@@ -97,6 +97,7 @@ class LessonTranscriber:
         self.overlap_tokens = config.get('overlap_tokens', 200)  # Overlap between chunks
         self.context_margin = config.get('context_margin', 1000)  # Margin for prompts
         self.chunk_context_overhead = config.get('chunk_context_overhead', 500)  # Overhead for chunk content
+        self.translation_cleanup_prompt_template = config.get('translation_cleanup_prompt_template', 'Du är en svenskspråkig AI-assistent vars enda funktion är att säkerställa att sammanfattningen är på korrekt svenska utan att förvränga tekniska termer.\n\nAnalysera JSON-objektet nedan. Om texten redan är på svenska, lämna den oförändrad. Om den är på engelska, översätt endast naturligt språk till svenska men BEHÅLL alla tekniska termer, kommandon, kod, och engelska namn exakt som de är.\n\nRör INTE JSON-strukturen eller nycklarna. Returnera endast det färdiga JSON-objektet.\n\n**JSON-OBJEKT:**\n{summary_json}')
         self.min_duration_minutes = config.get('min_duration_minutes', 5)
         self.max_duration_minutes = config.get('max_duration_minutes', 180)
         self.max_streaming_time_minutes = config.get('max_streaming_time_minutes', 10)
