@@ -235,7 +235,7 @@ class LessonTranscriber:
                 response = requests.post(
                     f"{self.ollama_url}/api/generate",
                     json=request_payload,
-                    timeout=60  # Shorter timeout for cleanup
+                    timeout=120  # Longer timeout for cleanup to handle slower models
                 )
 
                 if response.status_code == 200:
