@@ -652,12 +652,15 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
                     # Using faster-whisper
                     segments, info = self.whisper_model.transcribe(audio_path, beam_size=5)
                     logger.info(f"Detected language '{info.language}' with probability {info.language_probability:.2f}")
-                    transcript = " ".join([segment.text for segment in segments]).strip()
+
+                    # Convert segments generator to list for processing
+                    segments_list = list(segments)
+                    transcript = " ".join([segment.text for segment in segments_list]).strip()
 
                     # Calculate average metrics from segments
-                    if segments:
-                        avg_logprob = sum(segment.avg_logprob for segment in segments) / len(segments)
-                        no_speech_prob = sum(segment.no_speech_prob for segment in segments) / len(segments)
+                    if segments_list:
+                        avg_logprob = sum(segment.avg_logprob for segment in segments_list) / len(segments_list)
+                        no_speech_prob = sum(segment.no_speech_prob for segment in segments_list) / len(segments_list)
                     else:
                         avg_logprob = -1.0
                         no_speech_prob = 0.0
