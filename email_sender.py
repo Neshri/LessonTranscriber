@@ -289,9 +289,14 @@ class EmailSender:
         return subject if subject else self._generate_default_subject()
 
     def _get_cleaned_summary(self, content: str) -> str:
-        """Extract summary body from plain text content, including confidence score"""
-        # Return everything - the confidence score should be part of the content
-        return content.strip()
+        """Extract summary body from plain text content, removing subject and confidence markers"""
+        lines = content.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            if line.strip().startswith('---Subject:') or line.strip().startswith('---Confidence Score:'):
+                break
+            cleaned_lines.append(line)
+        return '\n'.join(cleaned_lines).strip()
 
     def _get_file_hash(self, file_path: Path) -> str:
         """Generate SHA256 hash of file content"""
