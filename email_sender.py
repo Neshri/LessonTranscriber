@@ -289,14 +289,30 @@ class EmailSender:
         return subject if subject else self._generate_default_subject()
 
     def _get_cleaned_summary(self, content: str) -> str:
-        """Extract summary body from plain text content, removing subject section"""
-        summary_lines = content.split('\n')
+        """Extract summary body from plain text content, including confidence score"""
+        lines = content.split('\n')
         summary_only = []
-        for line in summary_lines:
+        confidence_lines = []
+        in_confidence_section = False
+
+        for line in lines:
             if line.strip() == '---Subject:':
                 break
-            summary_only.append(line)
-        return '\n'.join(summary_only).strip()
+            elif line.strip() == '---Confidence Score:':
+                in_confidence_section = True
+                confidence_lines.append(line)
+            elif in_confidence_section:
+                confidence_lines.append(line)
+            else:
+                summary_only.append(line)
+
+        # Combine summary with confidence information
+        result = '\n'.join(summary_only).strip()
+        if confidence_lines:
+            confidence_text = '\n'.join(confidence_lines).strip()
+            result = f"{result}\n\n{confidence_text}"
+
+        return result
 
     def _get_file_hash(self, file_path: Path) -> str:
         """Generate SHA256 hash of file content"""
@@ -356,11 +372,18 @@ class EmailSender:
             # Convert markdown to HTML
             html_content = markdown.markdown(summary_body)
 
-            # Format body as HTML
+            # Extract confidence score for display
+            confidence_score = "N/A"
+            if "---Confidence Score:" in summary_body:
+                confidence_part = summary_body.split("---Confidence Score:")[1].split("\n")[0].strip()
+                confidence_score = confidence_part.split()[0]  # Get the numeric value
+
+            # Format body as HTML with confidence score
             body = f"""
             <html>
             <body>
                 <div>
+                <p><strong>Konfidenspoäng: {confidence_score}</strong></p>
                 {html_content}
                 </div>
                 <hr>
