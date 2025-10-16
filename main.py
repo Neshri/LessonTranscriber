@@ -199,6 +199,76 @@ class LessonTranscriber:
             'summary': llm_content.strip()
         }
 
+    def _ensure_swedish_summary(self, summary_json_str: str) -> dict:
+        """
+        Ensures the summary is in Swedish by applying the translation cleanup prompt.
+        Takes a JSON string and returns the cleaned JSON dictionary.
+        """
+        logger.info("Applying Swedish translation cleanup to summary")
+
+        # Ensure GPU memory is cleared before Ollama request
+        if torch and torch.cuda.is_available():
+            logger.info("Clearing GPU cache before Swedish cleanup request")
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            time.sleep(2)
+
+        prompt = self.translation_cleanup_prompt_template.format(summary_json=summary_json_str)
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                request_payload = {
+                    "model": self.ollama_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "num_ctx": 2000,  # Smaller context for cleanup
+                        "temperature": 0.0,  # Deterministic output
+                        "top_p": 1.0
+                    }
+                }
+
+                logger.info(f"Sending Swedish cleanup request to Ollama with model: {self.ollama_model}")
+
+                response = requests.post(
+                    f"{self.ollama_url}/api/generate",
+                    json=request_payload,
+                    timeout=60  # Shorter timeout for cleanup
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    cleaned_json_str = result.get('response', '').strip()
+
+                    # Parse the cleaned JSON
+                    try:
+                        cleaned_data = json.loads(cleaned_json_str)
+                        if 'subject' in cleaned_data and 'summary' in cleaned_data:
+                            logger.info("Swedish cleanup completed successfully")
+                            return cleaned_data
+                        else:
+                            logger.warning("Cleaned output missing required keys, using original")
+                            return self._parse_llm_output(summary_json_str)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse cleaned JSON: {e}, using original")
+                        return self._parse_llm_output(summary_json_str)
+                else:
+                    logger.error(f"Ollama cleanup API error: {response.status_code} - {response.text}")
+                    raise Exception(f"Ollama cleanup API returned {response.status_code}")
+
+            except Exception as e:
+                logger.warning(f"Swedish cleanup attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    logger.info("Waiting before retry...")
+                    time.sleep(10)
+                else:
+                    logger.error(f"All {max_retries} Swedish cleanup attempts failed, using original summary")
+                    return self._parse_llm_output(summary_json_str)
+
+        # Fallback to original if all cleanup attempts fail
+        return self._parse_llm_output(summary_json_str)
+
         
     def _calculate_confidence_score(self, avg_logprob, no_speech_prob, transcript, summary):
         """
@@ -1310,8 +1380,12 @@ Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
             # Step 2: Parse the raw string into a clean Python dictionary
             logger.info("Parsing LLM output")
             parsed_data = self._parse_llm_output(raw_llm_output)
-            subject = parsed_data['subject']
-            summary_content = parsed_data['summary']
+
+            # Step 2.5: Ensure summary is in Swedish using the cleanup prompt
+            logger.info("Ensuring summary is in Swedish")
+            cleaned_data = self._ensure_swedish_summary(json.dumps(parsed_data, ensure_ascii=False))
+            subject = cleaned_data['subject']
+            summary_content = cleaned_data['summary']
             logger.info(f"Extracted subject: {repr(subject)}, summary length: {len(summary_content)}")
 
             # Step 2.5: Calculate confidence score
