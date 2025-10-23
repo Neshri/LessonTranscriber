@@ -15,7 +15,7 @@
   "max_summary_length": 3000,
   "gpu_device": "auto",
   "chunk_size_mb": 10,
-  "max_context_tokens": 8000,
+  "max_context_tokens": 4096,
   "overlap_tokens": 200,
   "context_margin": 1000,
   "chunk_context_overhead": 500,
