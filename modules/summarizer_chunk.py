@@ -170,9 +170,9 @@ def summarize_chunk(config, ollama_manager, transcript_chunk, is_chunk=False):
                 logger.error(f"Read timeout occurred after {progressive_timeout} seconds for chunk summarization")
                 if attempt < max_retries - 1:
                     # Check if Ollama service is responsive before restarting
-                    if not ollama_manager._check_ollama_health():
+                    if not ollama_manager.check_ollama_health():
                         logger.info("Ollama service health check failed. Restarting service...")
-                        ollama_manager._restart_ollama_service()
+                        ollama_manager.restart_ollama_service()()
                         time.sleep(60)  # Longer wait after restart
                     else:
                         logger.info("Ollama service is responsive despite timeout. Waiting before retry...")
@@ -184,7 +184,7 @@ def summarize_chunk(config, ollama_manager, transcript_chunk, is_chunk=False):
                 logger.error(f"Connection error to Ollama service: {e}")
                 if attempt < max_retries - 1:
                     logger.info("Connection failed. Restarting Ollama service...")
-                    ollama_manager._restart_ollama_service()
+                    ollama_manager.restart_ollama_service()()
                     time.sleep(30)
                 else:
                     logger.error(f"All {max_retries} Ollama attempts failed")
@@ -193,7 +193,7 @@ def summarize_chunk(config, ollama_manager, transcript_chunk, is_chunk=False):
                 logger.error(f"Streaming timeout exceeded for chunk summarization")
                 if attempt < max_retries - 1:
                     logger.info("Streaming timeout indicates service hang. Restarting Ollama service...")
-                    ollama_manager._restart_ollama_service()
+                    ollama_manager.restart_ollama_service()()
                     time.sleep(60)
                 else:
                     logger.error(f"All {max_retries} Ollama attempts failed due to streaming timeouts")

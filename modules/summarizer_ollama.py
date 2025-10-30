@@ -27,7 +27,7 @@ class OllamaServiceManager:
         self.ollama_url = ollama_url
         self.ollama_model = ollama_model
 
-    def _check_ollama_health(self):
+    def check_ollama_health(self):
         """Check if Ollama service is responsive"""
         try:
             health_payload = {
@@ -55,7 +55,7 @@ class OllamaServiceManager:
             # Don't restart automatically - health check may be interfering
             return False
 
-    def _restart_ollama_service(self):
+    def restart_ollama_service(self):
         """Attempt to restart Ollama service"""
         try:
             logger.info("Attempting to restart Ollama service...")

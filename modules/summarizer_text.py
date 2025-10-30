@@ -22,7 +22,7 @@ def split_text_into_chunks(text, max_tokens=3000, overlap_tokens=200):
     current_tokens = 0
 
     for i, sentence in enumerate(sentences):
-        sentence_tokens = _estimate_token_count(sentence)
+        sentence_tokens = estimate_token_count(sentence)
 
         if sentence_tokens > max_tokens:
             # Handle very long sentences by breaking them
@@ -51,10 +51,10 @@ def split_text_into_chunks(text, max_tokens=3000, overlap_tokens=200):
                 current_chunk = current_chunk[overlap_start:] + sentence + ". "
             else:
                 current_chunk = sentence + ". "
-            current_tokens = _estimate_token_count(current_chunk)
+            current_tokens = estimate_token_count(current_chunk)
         else:
             current_chunk += sentence + ". "
-            current_tokens = _estimate_token_count(current_chunk)
+            current_tokens = estimate_token_count(current_chunk)
 
     if current_chunk:
         chunks.append(current_chunk.strip())
