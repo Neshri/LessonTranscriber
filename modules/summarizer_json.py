@@ -143,10 +143,11 @@ class SummarizerJSON:
                             return cleaned_data
                         else:
                             logger.warning("Cleaned output missing required keys, using original")
-                            return self._parse_llm_output(summary_json_str)
+                            return self.parse_llm_output(summary_json_str)
                     except json.JSONDecodeError as e:
+                        logger.debug(f"LLM response that failed JSON parsing: {repr(cleaned_json_str)}")
                         logger.warning(f"Failed to parse cleaned JSON: {e}, using original")
-                        return self._parse_llm_output(summary_json_str)
+                        return self.parse_llm_output(summary_json_str)
                 else:
                     logger.error(f"Ollama cleanup API error: {response.status_code} - {response.text}")
                     raise Exception(f"Ollama cleanup API returned {response.status_code}")
@@ -158,7 +159,7 @@ class SummarizerJSON:
                     time.sleep(10)
                 else:
                     logger.error(f"All {max_retries} Swedish cleanup attempts failed, using original summary")
-                    return self._parse_llm_output(summary_json_str)
+                    return self.parse_llm_output(summary_json_str)
 
         # Fallback to original if all cleanup attempts fail
-        return self._parse_llm_output(summary_json_str)
+        return self.parse_llm_output(summary_json_str)
