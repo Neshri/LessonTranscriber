@@ -40,7 +40,9 @@ class SummarizerJSON:
         # Look for "summary": "..." and escape newlines within the quotes
         def escape_newlines_in_summary(match):
             content = match.group(1)
-            # Escape newlines and other problematic characters
+            # First, escape backslashes
+            content = content.replace('\\', '\\\\')
+            # Then escape newlines and other problematic characters
             content = content.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
             return f'"summary": "{content}"'
 
