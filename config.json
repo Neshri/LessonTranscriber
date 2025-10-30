@@ -1,6 +1,6 @@
 {
   "whisper_model": "KBLab/kb-whisper-large",
-  "ollama_model": "gpt-oss:20b",
+  "ollama_model": "gemma3:27b-it-qat",
   "ollama_url": "http://127.0.0.1:11434",
 
   "summarization_prompt_template": "Du är en svenskspråkig AI-assistent som sammanfattar lektionstranskriptioner inom IT, teknik och nätverk. Texten kan innehålla spontant tal, felsägningar och engelska termer. Ditt mål är att skapa en tekniskt korrekt, kortfattad och språkligt flytande sammanfattning.\n\nAnalysera TEXTEN nedan, rätta uppenbara transkriptionsfel utan att ändra betydelsen, och skapa sedan ett JSON-objekt enligt exemplen.\n\nSvara ENDAST med det färdiga JSON-objektet.\n\n**TEXT:**\n{transcript}\n\n**JSON-OBJEKT MED REGLER:**\n```json\n{{\n  \"subject\": \"En kort, beskrivande ämnesrad (3–6 ord)\",\n  \"summary\": \"En enda JSON-sträng som innehåller en punktlista (6–8 punkter). Varje punkt börjar med ett bindestreck (-) och separeras med ett radbrytetecken (\\n). Fokusera på tekniska händelser, kommandon, problem och lösningar. Undvik utfyllnad och irrelevanta detaljer.\"\n}}\n```",
