@@ -61,7 +61,8 @@ Examples:
         logger.info("Lesson transcriber initialized successfully")
 
         # Initialize email sender for sending summaries
-        email_sender = EmailSender(conn=conn)
+        email_recipients = config.get('email_recipients', [])
+        email_sender = EmailSender(recipients=email_recipients, conn=conn)
         logger.info("Email sender initialized successfully")
 
         if args.monitor:
