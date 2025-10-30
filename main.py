@@ -103,7 +103,7 @@ def monitor_mode(config, transcriber, email_sender, conn):
             # Filter out already processed files
             new_files = []
             for audio_path in audio_paths:
-                if not is_file_processed(audio_path, processed_files, conn):
+                if not is_file_processed(conn, audio_path):
                     new_files.append(audio_path)
 
             if new_files:
@@ -190,7 +190,7 @@ def batch_mode(config, transcriber, email_sender, input_path, conn):
     for audio_path in audio_paths:
         try:
             # Check if already processed
-            if is_file_processed(audio_path, processed_files, conn):
+            if is_file_processed(conn, audio_path):
                 logger.info(f"Skipping already processed file: {audio_path}")
                 skipped_count += 1
                 continue

@@ -8,3 +8,4 @@ __pycache__/
 sent_emails.json
 .env
 processed_files.json
+*.db
