@@ -16,7 +16,7 @@ def calculate_confidence_score(avg_logprob, no_speech_prob, transcript, summary)
     Args:
         avg_logprob: Average log probability from Whisper (-inf to 0, higher is better)
         no_speech_prob: Average no-speech probability from Whisper (0-1, lower is better)
-        transcript: Original transcript text
+        transcript: Original transcript text (can be full text or excerpts)
         summary: Generated summary text
 
     Returns:

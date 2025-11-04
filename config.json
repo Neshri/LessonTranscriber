@@ -11,7 +11,7 @@
 
   "critique_prompt_template": "Du är en kritisk AI-assistent som utvärderar sammanfattningar av lektionstranskriptioner inom IT, teknik och nätverk. Analysera följande sammanfattning och identifiera potentiella fel, tvetydigheter eller områden där transkriptionsfel kan ha påverkat tolkningen. Var särskilt skeptisk mot tekniska termer som kan vara felaktiga eller missförstådda.\n\nFokusera på:\n- Möjliga transkriptionsfel som kan ha ändrat betydelsen\n- Tekniska termer som verkar felaktiga eller osannolika\n- Logiska inkonsekvenser i sammanfattningen\n\n**SAMMANFATTNING:**\n{summary}\n\n**KRITIK:**\nReturnera en lista med punkter som beskriver eventuella problem.",
 
-  "confidence_assessment_prompt_template": "Du är en AI-assistent som bedömer förtroendet för sammanfattningar av lektionstranskriptioner. Analysera följande sammanfattning och ge ett förtroendebetyg på en skala från 0.0 till 1.0, där 0.0 är mycket låg tilltro och 1.0 är mycket hög tilltro.\n\nFaktorer att överväga:\n- Noggrannheten av tekniska termer\n- Sannolikheten av transkriptionsfel\n- Övergripande logisk koherens\n\n**SAMMANFATTNING:**\n{summary}\n\n**FÖRTROENDE:**\nReturnera endast ett decimaltal mellan 0.0 och 1.0.",
+  "confidence_assessment_prompt_template": "Du är en AI-assistent som bedömer förtroendet för sammanfattningar av lektionstranskriptioner genom att jämföra med originaltranskriptet. Analysera följande sammanfattning mot utdrag från originaltranskriptet och ge ett förtroendebetyg på en skala från 0.0 till 1.0, där 0.0 är mycket låg tilltro och 1.0 är mycket hög tilltro.\n\nSpecifika kriterier att överväga:\n- Täckningsnoggrannhet: Hur väl sammanfattar sammanfattningen viktiga aspekter från transkriptet?\n- Faktuell korrekthet: Hur många fel finns i sammanfattningen jämfört med transkriptet?\n- Teknisk noggrannhet: Är tekniska termer korrekta och väl använda?\n- Logisk koherens: Är sammanfattningen logiskt sammanhängande och fri från motsägelser?\n- Sannolikhet av transkriptionsfel: Hur mycket kan fel i transkriptet ha påverkat sammanfattningen?\n\n**TRANSCRIPT UTDAG:**\n{transcript_excerpt}\n\n**SAMMANFATTNING:**\n{summary}\n\n**FÖRTROENDE:**\nReturnera endast ett decimaltal mellan 0.0 och 1.0.",
    
   "translation_cleanup_prompt_template": "Du är en svenskspråkig AI-assistent vars enda funktion är att säkerställa att sammanfattningen är på korrekt svenska utan att förvränga tekniska termer.\n\nAnalysera JSON-objektet nedan. Om texten redan är på svenska, lämna den oförändrad. Om den är på engelska, översätt endast naturligt språk till svenska men BEHÅLL alla tekniska termer, kommandon, kod, och engelska namn exakt som de är.\n\nRör INTE JSON-strukturen eller nycklarna. Returnera endast det färdiga JSON-objektet.\n\n**JSON-OBJEKT:**\n{summary_json}",
 
@@ -32,6 +32,6 @@
     "anton.lundgren94@gmail.com"
   ],
   "default_audio_source": "lesson_audio",
-  "critique_confidence_threshold": 0.8,
+  "critique_confidence_threshold": 0.6,
   "enable_critique_step": true
 }

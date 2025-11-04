@@ -130,7 +130,7 @@ class Summarizer:
         if self.critique_summarizer:
             logger.info("Performing critique and confidence assessment")
             critique_feedback = self.critique_summarizer.perform_critique(summary_content, transcript)
-            critique_confidence = self.critique_summarizer.assess_confidence(summary_content)
+            critique_confidence = self.critique_summarizer.assess_confidence(summary_content, transcript)
             logger.info(f"Critique confidence: {critique_confidence:.3f}")
 
             # Use the higher of the two confidence scores
