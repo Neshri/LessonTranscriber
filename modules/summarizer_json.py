@@ -36,19 +36,9 @@ class SummarizerJSON:
         """
         Attempt to repair common JSON formatting issues in LLM output.
         """
-        # Fix unescaped newlines in summary field by escaping them
-        # Look for "summary": "..." and escape newlines within the quotes
-        def escape_newlines_in_summary(match):
-            content = match.group(1)
-            # First, escape backslashes
-            content = content.replace('\\', '\\\\')
-            # Then escape newlines and other problematic characters
-            content = content.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
-            return f'"summary": "{content}"'
-
-        # Regex to match summary field with unescaped content
-        candidate = re.sub(r'"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', escape_newlines_in_summary, candidate, flags=re.DOTALL)
-
+        # Escape problematic characters in the entire JSON string
+        candidate = candidate.replace('\\', '\\\\')
+        candidate = candidate.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
         return candidate
 
     def parse_llm_output(self, llm_content: str) -> dict:
@@ -58,33 +48,51 @@ class SummarizerJSON:
         Falls back to plain text if no valid JSON is found.
         """
         if not isinstance(llm_content, str):
+            logger.debug("LLM content is not a string, converting to dict")
             return {
                 'subject': self._generate_default_subject(),
                 'summary': str(llm_content)
             }
 
         # Remove any leading/trailing markdown code fences
+        original_content = llm_content
         llm_content = re.sub(r'^```(?:json)?\s*', '', llm_content.strip())
         llm_content = re.sub(r'```\s*$', '', llm_content)
+        if llm_content != original_content:
+            logger.debug("Removed markdown code fences from LLM content")
 
-        # Find all simple JSON object substrings (non-greedy to avoid over-matching)
-        json_candidates = re.findall(r'\{.*?\}', llm_content, re.DOTALL)
+        # Find the substring starting from the leftmost '{' and ending at the rightmost '}'
+        first_brace = llm_content.find('{')
+        last_brace = llm_content.rfind('}')
+        if first_brace != -1 and last_brace > first_brace:
+            json_candidates = [llm_content[first_brace:last_brace + 1]]
+        else:
+            json_candidates = []
+        logger.debug(f"Found {len(json_candidates)} JSON candidate(s) in LLM output")
 
         # Try to parse each candidate starting from the end (last in response)
-        for candidate in reversed(json_candidates):
+        for i, candidate in enumerate(reversed(json_candidates)):
+            logger.info(f"Processing JSON candidate {len(json_candidates) - i} (from end): {repr(candidate)}")
             # Try to repair common JSON formatting issues
             repaired_candidate = self._repair_json_candidate(candidate)
+            if repaired_candidate != candidate:
+                logger.debug(f"Repaired JSON candidate: {repr(repaired_candidate)}")
 
             try:
                 data = json.loads(repaired_candidate)
+                logger.debug(f"Successfully parsed JSON: {data}")
                 # Ensure required keys are present
                 if 'subject' in data and 'summary' in data:
                     subject = data.get('subject', self._generate_default_subject())
                     summary = data.get('summary', 'Sammanfattning saknas.')
                     if not subject:
                         subject = self._generate_default_subject()
+                    logger.info("Successfully parsed LLM output with required keys")
                     return {'subject': subject, 'summary': summary}
-            except json.JSONDecodeError:
+                else:
+                    logger.debug(f"Parsed JSON missing required keys 'subject' and/or 'summary'. Keys present: {list(data.keys())}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parsing failed for candidate: {e}")
                 continue  # Skip invalid JSON
 
         logger.warning("LLM output does not contain valid JSON with required keys, treating as plain text")
