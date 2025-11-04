@@ -36,9 +36,13 @@ class SummarizerJSON:
         """
         Attempt to repair common JSON formatting issues in LLM output.
         """
-        # Escape problematic characters in the entire JSON string
-        candidate = candidate.replace('\\', '\\\\')
-        candidate = candidate.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+        def escape_summary_value(value):
+            # Escape backslashes, quotes, and newlines in summary value
+            return value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+
+        # Use regex to locate and escape content within the "summary" field value
+        pattern = r'("summary"\s*:\s*)"((?:[^"\\]|\\.)*)"'
+        candidate = re.sub(pattern, lambda m: m.group(1) + '"' + escape_summary_value(m.group(2)) + '"', candidate)
         return candidate
 
     def parse_llm_output(self, llm_content: str) -> dict:
@@ -61,17 +65,34 @@ class SummarizerJSON:
         if llm_content != original_content:
             logger.debug("Removed markdown code fences from LLM content")
 
-        # Find the substring starting from the leftmost '{' and ending at the rightmost '}'
+        # Find the substring from the leftmost '{' to the matching closing '}' using brace counter
         first_brace = llm_content.find('{')
-        last_brace = llm_content.rfind('}')
-        if first_brace != -1 and last_brace > first_brace:
-            json_candidates = [llm_content[first_brace:last_brace + 1]]
+        if first_brace != -1:
+            brace_count = 0
+            end_pos = -1
+            for i in range(first_brace, len(llm_content)):
+                if llm_content[i] == '{':
+                    brace_count += 1
+                elif llm_content[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_pos = i
+                        break
+            if end_pos != -1:
+                candidate = llm_content[first_brace:end_pos + 1]
+                # Clean leading whitespace after opening '{' and trailing whitespace before closing '}'
+                candidate = re.sub(r'^\{\s*', '{', candidate)
+                candidate = re.sub(r'\s*\}\s*$', '}', candidate, flags=re.DOTALL)
+                json_candidates = [candidate]
+            else:
+                json_candidates = []
         else:
             json_candidates = []
         logger.debug(f"Found {len(json_candidates)} JSON candidate(s) in LLM output")
 
         # Try to parse each candidate starting from the end (last in response)
         for i, candidate in enumerate(reversed(json_candidates)):
+            candidate = candidate.strip()  # Strip leading/trailing whitespace/newlines
             logger.info(f"Processing JSON candidate {len(json_candidates) - i} (from end): {repr(candidate)}")
             # Try to repair common JSON formatting issues
             repaired_candidate = self._repair_json_candidate(candidate)
