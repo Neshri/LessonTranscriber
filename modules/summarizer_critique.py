@@ -31,7 +31,7 @@ class CritiqueSummarizer:
 
     def _extract_key_excerpts(self, transcript, summary):
         """
-        Extract key excerpts from transcript: first 1000 chars, last 1000 chars, and middle section around key terms.
+        Extract key excerpts from transcript: first 500 chars, last 500 chars, and middle section around key terms.
 
         Args:
             transcript: Full transcript text
@@ -42,13 +42,13 @@ class CritiqueSummarizer:
         """
         excerpts = []
 
-        # First 1000 characters
+        # First 500 characters
         if len(transcript) > 0:
-            excerpts.append(transcript[:1000])
+            excerpts.append(transcript[:500])
 
-        # Last 1000 characters
-        if len(transcript) > 1000:
-            excerpts.append(transcript[-1000:])
+        # Last 500 characters
+        if len(transcript) > 500:
+            excerpts.append(transcript[-500:])
 
         # Middle section around key terms
         if summary and transcript:
@@ -67,8 +67,8 @@ class CritiqueSummarizer:
                 # Use median position for middle section
                 sorted_positions = sorted(positions)
                 middle_pos = sorted_positions[len(sorted_positions) // 2]
-                start = max(0, middle_pos - 500)
-                end = min(len(transcript), middle_pos + 500)
+                start = max(0, middle_pos - 250)
+                end = min(len(transcript), middle_pos + 250)
                 middle_excerpt = transcript[start:end]
                 if middle_excerpt.strip():  # Only add if not empty
                     excerpts.append(middle_excerpt)
