@@ -9,6 +9,7 @@ import requests
 import json
 import time
 import re
+import codecs
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,8 @@ class SummarizerJSON:
                 if 'subject' in data and 'summary' in data:
                     subject = data.get('subject', self._generate_default_subject())
                     summary = data.get('summary', 'Sammanfattning saknas.')
+                    # Decode escape sequences in summary field
+                    summary = codecs.decode(summary, 'unicode_escape')
                     if not subject:
                         subject = self._generate_default_subject()
                     logger.info("Successfully parsed LLM output with required keys")
