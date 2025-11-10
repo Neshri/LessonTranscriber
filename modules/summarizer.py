@@ -108,59 +108,54 @@ class Summarizer:
 
     def process_summary(self, raw_llm_output, avg_logprob, no_speech_prob, transcript):
         """
-        Process raw LLM output into final summary with confidence score, critique, and potential refinement
+        Process raw LLM output through a strict, sequential quality gate.
+        Accuracy is the only priority.
         """
-        # Step 1: Parse the raw string into a clean Python dictionary
         logger.info("Parsing LLM output")
         parsed_data = self.summarizer_json.parse_llm_output(raw_llm_output)
 
-        # Step 2: Ensure summary is in Swedish using the cleanup prompt
         logger.info("Ensuring summary is in Swedish")
         cleaned_data = self.summarizer_json.ensure_swedish_summary(json.dumps(parsed_data, ensure_ascii=False))
         subject = cleaned_data['subject']
-        summary_content = cleaned_data['summary']
-        logger.info(f"Extracted subject: {repr(subject)}, summary length: {len(summary_content)}")
+        current_summary = cleaned_data['summary']
+        logger.info(f"Initial subject: '{subject}', summary length: {len(current_summary)}")
 
-        # Step 3: Calculate initial confidence score
-        logger.info("Calculating initial confidence score")
-        confidence_score = calculate_confidence_score(avg_logprob, no_speech_prob, transcript, summary_content)
-        logger.info(f"Initial confidence score calculated: {confidence_score:.3f}")
+        # ========================================================================
+        # == CRITICAL QUALITY GATE: Critique is now the sole decision-maker.  ====
+        # ========================================================================
+        if not self.critique_summarizer:
+            logger.warning("Critique is disabled. Cannot guarantee summary accuracy.")
+            # Calculate a final confidence score and return without refinement.
+            final_confidence = calculate_confidence_score(avg_logprob, no_speech_prob, transcript, current_summary)
+            return {
+                'subject': subject,
+                'summary': current_summary,
+                'confidence': final_confidence,
+                'critique_feedback': "Critique disabled."
+            }
 
-        # Step 4: Perform critique and confidence assessment if enabled
-        if self.critique_summarizer:
-            logger.info("Performing critique and confidence assessment")
-            critique_feedback = self.critique_summarizer.perform_critique(summary_content, transcript)
-            critique_confidence = self.critique_summarizer.assess_confidence(summary_content, transcript)
-            logger.info(f"Critique confidence: {critique_confidence:.3f}")
+        logger.info("--- Starting Mandatory Critique and Revision Cycle ---")
+        # perform_critique now returns the potentially revised summary and the problems found.
+        revised_summary, problems_found = self.critique_summarizer.perform_critique(current_summary, transcript)
 
-            # Use the higher of the two confidence scores
-            final_confidence = max(confidence_score, critique_confidence)
-
-            # Check if refinement is needed
-            threshold = self.config.get('critique_confidence_threshold', 0.8)
-            if final_confidence < threshold:
-                logger.info(f"Confidence {final_confidence:.3f} below threshold {threshold}, generating refined summary")
-                refined_data = self._generate_refined_summary(subject, summary_content, critique_feedback, transcript)
-                if refined_data:
-                    subject = refined_data['subject']
-                    summary_content = refined_data['summary']
-                    logger.info("Refined summary generated successfully")
-                else:
-                    logger.warning("Failed to generate refined summary, using original")
-            else:
-                logger.info(f"Confidence {final_confidence:.3f} above threshold {threshold}, no refinement needed")
+        if not problems_found:
+            logger.info("--- Critique PASSED. No problems found. Finalizing summary. ---")
+            final_summary = current_summary
+            critique_feedback = "All rules and verifications passed."
         else:
-            final_confidence = confidence_score
-            critique_feedback = None
+            logger.warning(f"--- Critique FAILED. Problems found. Using revised summary. ---")
+            logger.warning(f"Problems: {problems_found}")
+            final_summary = revised_summary # Use the summary revised by the critique process
+            critique_feedback = f"Original summary failed. Revised to fix {len(problems_found)} issues."
+
+        # Final confidence is now calculated on the FINAL version of the summary.
+        final_confidence = self.critique_summarizer.assess_confidence(final_summary, transcript)
+        logger.info(f"Final confidence score after critique: {final_confidence:.3f}")
 
         return {
             'subject': subject,
-            'summary': summary_content,
+            'summary': final_summary,
             'confidence': final_confidence,
-            'whisper_metrics': {
-                'avg_logprob': avg_logprob,
-                'no_speech_prob': no_speech_prob
-            },
             'critique_feedback': critique_feedback
         }
 

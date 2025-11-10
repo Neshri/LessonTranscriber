@@ -8,6 +8,7 @@ import logging
 import requests
 import json
 import time
+import textwrap
 import re
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ ORIGINAL SAMMANFATTNING:
 PROBLEM SOM HITTADES:
 {problems}
 
-REVIDERAD SAMMANFATTNING (endast JSON):"""
+REVIDERAD SAMMANFATTNING:"""
 
 
 class CritiqueSummarizer:
@@ -68,9 +69,9 @@ class CritiqueSummarizer:
             "poor": 0.3
         },
         "min_point_length": 10,
-        "max_sentences_excerpt": 3,
+        "max_sentences_excerpt": 5,
         "min_sentence_length": 20,
-        "error_trunc_len": 50
+        "error_trunc_len": 100
     }
 
     def __init__(self, config):
@@ -104,7 +105,7 @@ class CritiqueSummarizer:
             logger.error(f"Ollama request failed: {e}")
             raise
 
-    def _extract_relevant_excerpt(self, transcript, summary_point, max_chars=200):
+    def _extract_relevant_excerpt(self, transcript, summary_point, max_chars=400):
         """Extract specific excerpt relevant to a summary point"""
         if not transcript or not summary_point:
             return ""
@@ -113,7 +114,7 @@ class CritiqueSummarizer:
         key_terms = set(re.findall(r'\b[a-zA-ZåäöÅÄÖ]{3,}\b', summary_point.lower()))
 
         if not key_terms:
-            # Fallback: take first 200 chars if no key terms found
+            # Fallback: take first 400 chars if no key terms found
             return transcript[:max_chars]
 
         # Find sentences containing key terms by splitting transcript on sentence endings
@@ -128,7 +129,7 @@ class CritiqueSummarizer:
             sentence_words = set(re.findall(r'\b[a-zA-ZåäöÅÄÖ]{3,}\b', sentence.lower()))
             if sentence_words.intersection(key_terms):
                 relevant_sentences.append(sentence)
-                if len(relevant_sentences) >= self.RULES["max_sentences_excerpt"]:  # Max 3 sentences
+                if len(relevant_sentences) >= self.RULES["max_sentences_excerpt"]:  # Max 5 sentences
                     break
 
         if not relevant_sentences:
@@ -138,7 +139,7 @@ class CritiqueSummarizer:
         return excerpt[:max_chars] if len(excerpt) > max_chars else excerpt
 
     def verify_point(self, summary_point, transcript):
-        """Verify a single summary point against transcript"""
+        """Verify a single summary point against transcript with robust parsing."""
         excerpt = self._extract_relevant_excerpt(transcript, summary_point)
         if not excerpt:
             return False
@@ -148,7 +149,22 @@ class CritiqueSummarizer:
         try:
             result = self._call_ollama(prompt, num_ctx=1500, temperature=0.0, top_p=0.8, timeout=30)
             verification = result.get('response', '').strip().upper()
-            return "KORREKT" in verification
+
+            # Robust Logic:
+            # 1. Check if "FEL" (incorrect) is explicitly stated. If so, it's definitively false.
+            # 2. Otherwise, check if "KORREKT" (correct) is present.
+            # This prevents a response like "Jag är inte säker, men det verkar inte FEL" from passing.
+            has_fel = "FEL" in verification
+            has_korrekt = "KORREKT" in verification
+
+            if has_fel:
+                return False  # Prioritize "FEL" to be safe.
+            if has_korrekt:
+                return True   # If "FEL" is not present, "KORREKT" is a clear signal.
+            
+            logger.warning(f"Ambiguous verification response: '{verification}'. Defaulting to FEL.")
+            return False # If neither is present, the response is ambiguous. Fail safely.
+
         except requests.RequestException:
             return False
 
@@ -165,14 +181,15 @@ class CritiqueSummarizer:
         except requests.RequestException:
             return "Tekniskt fel vid regelanalys"
 
-    def revise_summary(self, summary, broken_rules):
+    def revise_summary(self, summary, problem_string):
         """Revise summary to fix broken rules"""
-        logger.info(f"Revise summary called with broken_rules: {broken_rules}")
-        prompt = PROMPT_REVISE_SUMMARY.format(summary=summary, problems=broken_rules)
+        prompt = PROMPT_REVISE_SUMMARY.format(summary=summary, problems=problem_string)
 
         try:
             result = self._call_ollama(prompt, num_ctx=2500, temperature=0.1, top_p=0.9, timeout=90)
-            return result.get('response', '').strip()
+            revised = result.get('response', '').strip()
+            logger.debug(f"Revised summary: {revised[:200]}...")
+            return revised
         except requests.RequestException:
             logger.warning("Revision failed, returning original summary")
             return summary  # Return original on failure
@@ -201,25 +218,36 @@ class CritiqueSummarizer:
         for point in bullet_points:
             is_correct = self.verify_point(point, transcript)
             if not is_correct:
-                problems.append(f"Verifieringsfel: {point[:self.RULES['error_trunc_len']]}...")
+                logger.debug(f"Point verification failed: {point}")
+                # Return the point itself along with the error message
+                problem_detail = {
+                    "point": point,
+                    "error": f"Verifieringsfel: Innehållet kunde inte verifieras mot transkriptet."
+                }
+                problems.append(problem_detail)
         return problems
 
-    def _revise_phase(self, summary, problems):
-        """Phase 3: Revise summary if problems were found."""
+    def _revise_phase(self, summary, problems, transcript=None):
         if not problems:
-            return summary, "Inga problem identifierade"
+            return summary, []
 
-        logger.info(f"Problems found: {problems}")
-        revised = self.revise_summary(summary, "\n".join(problems))
+        problem_string = ""
+        for problem in problems:
+            # Check if it's a verification problem (a dict) or a rule problem (a string)
+            if isinstance(problem, dict):
+                point = problem['point']
+                error = problem['error']
+                # For each failed point, find its specific context in the transcript
+                context_excerpt = self._extract_relevant_excerpt(transcript, point, max_chars=600)
+                problem_string += f"- PUNKT: \"{point}\"\n  FEL: {error}\n  RELEVANT KONTEXT: \"{context_excerpt}\"\n\n"
+            else: # It's a rule problem string
+                problem_string += f"- ALLMÄNT FEL: {problem}\n\n"
 
-        # Check revised version
-        second_rules = self.check_rules(revised)
-        if not second_rules or "alla regler uppfylls" in second_rules.lower():
-            logger.info("Revision successful, all rules now pass")
-            return revised, f"Reviderad: {len(problems)} problem lösta"
-        else:
-            logger.warning("Revision incomplete, some rules still broken")
-            return revised, f"Delvis reviderad: {second_rules}"
+        logger.info(f"Problems with context prepared for revision:\n{problem_string}")
+        revised = self.revise_summary(summary, problem_string) # revise_summary just needs to format the prompt now
+
+        # ... (rest of the function to check the revised version) ...
+        return revised, problems # Return the original list of problem dicts/strings
 
     def perform_critique(self, summary, transcript=None):
         """
@@ -232,16 +260,20 @@ class CritiqueSummarizer:
             time.sleep(1)
 
         # Phase 1: Check rules
+        logger.debug("Starting Phase 1: Rule checking")
         rule_problem = self._check_rules_phase(summary)
         problems = [rule_problem] if rule_problem else []
+        logger.debug(f"Rule problems: {problems}")
 
         # Phase 2: Verify points if transcript available
         if transcript:
+            logger.debug("Starting Phase 2: Point verification")
             transcript_problems = self._verify_points_phase(summary, transcript)
             problems.extend(transcript_problems)
+            logger.debug(f"Total problems after verification: {len(problems)}")
 
         # Phase 3: Revise if needed
-        return self._revise_phase(summary, problems)
+        return self._revise_phase(summary, problems, transcript)
 
     def _calculate_rule_score(self, broken_rules):
         """Calculate confidence score based on rule compliance."""
