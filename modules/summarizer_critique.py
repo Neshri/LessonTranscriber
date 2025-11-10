@@ -17,19 +17,8 @@ try:
 except ImportError:
     torch = None
 
-
-class CritiqueSummarizer:
-    """
-    Rule-based critique and revision system
-    """
-    def __init__(self, config):
-        self.config = config
-        self.ollama_url = config['ollama_url']
-        self.ollama_model = config['ollama_model']
-        self.max_context_tokens = config.get('max_context_tokens', 4096)
-        
-        # Rule-based critique and revision prompts
-        self.rule_check_prompt = """Analysera sammanfattning mot dessa kvalitetsregler:
+# Module-level prompt constants
+PROMPT_RULE_CHECK = """Analysera sammanfattning mot dessa kvalitetsregler:
 
 REGLER:
 1. Teknisk korrekthet: Tekniska termer måste vara korrekta
@@ -43,8 +32,8 @@ SAMMANFATTNING:
 {summary}
 
 BEDÖMNING: Lista endast reglerna som inte uppfylls."""
-        
-        self.transcript_check_prompt = """Kontrollera denna punkt från sammanfattning mot transkript. Verifiera att påståendet faktiskt finns i transkriptet.
+
+PROMPT_VERIFY_POINT = """Kontrollera denna punkt från sammanfattning mot transkript. Verifiera att påståendet faktiskt finns i transkriptet.
 
 SAMMANFATTNING PUNKT:
 {point}
@@ -53,8 +42,8 @@ TRANSKRIPT UTDDRAG:
 {excerpt}
 
 VERIFIERING: Endast "KORREKT" om påståendet finns i transkriptet, annars "FEL"."""
-        
-        self.revision_prompt = """Revidera sammanfattning för att uppfylla ALLA kvalitetsregler. Behåll all teknisk information men förbättra struktur, korrekthet och språk.
+
+PROMPT_REVISE_SUMMARY = """Revidera sammanfattning för att uppfylla ALLA kvalitetsregler. Behåll all teknisk information men förbättra struktur, korrekthet och språk.
 
 ORIGINAL SAMMANFATTNING:
 {summary}
@@ -64,34 +53,87 @@ PROBLEM SOM HITTADES:
 
 REVIDERAD SAMMANFATTNING (endast JSON):"""
 
+
+class CritiqueSummarizer:
+    """
+    Rule-based critique and revision system
+    """
+    # Class-level constants for rules and thresholds
+    RULES = {
+        "length": "6-8 punkter",
+        "confidence_thresholds": {
+            "perfect": 0.9,
+            "good": 0.7,
+            "average": 0.5,
+            "poor": 0.3
+        },
+        "min_point_length": 10,
+        "max_sentences_excerpt": 3,
+        "min_sentence_length": 20,
+        "error_trunc_len": 50
+    }
+
+    def __init__(self, config):
+        self.config = config
+        self.ollama_url = config['ollama_url']
+        self.ollama_model = config['ollama_model']
+        self.max_context_tokens = config.get('max_context_tokens', 4096)
+
+    def _call_ollama(self, prompt, num_ctx, temperature, top_p=0.8, timeout=90):
+        """Helper method to handle Ollama request payload construction and posting."""
+        request_payload = {
+            "model": self.ollama_model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_ctx": num_ctx,
+                "temperature": temperature,
+                "top_p": top_p
+            }
+        }
+
+        try:
+            response = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json=request_payload,
+                timeout=timeout
+            )
+            response.raise_for_status()  # Raise exception for bad status codes
+            return response.json()
+        except requests.RequestException as e:
+            logger.error(f"Ollama request failed: {e}")
+            raise
+
     def _extract_relevant_excerpt(self, transcript, summary_point, max_chars=200):
         """Extract specific excerpt relevant to a summary point"""
         if not transcript or not summary_point:
             return ""
-        
-        # Extract key terms from the specific summary point
+
+        # Extract key terms from the specific summary point using regex for Swedish words (>=3 chars)
         key_terms = set(re.findall(r'\b[a-zA-ZåäöÅÄÖ]{3,}\b', summary_point.lower()))
-        
+
         if not key_terms:
-            # Fallback: take first 200 chars
+            # Fallback: take first 200 chars if no key terms found
             return transcript[:max_chars]
-        
-        # Find sentences containing key terms
+
+        # Find sentences containing key terms by splitting transcript on sentence endings
         relevant_sentences = []
-        for sentence in re.split(r'[.!?]+', transcript.strip()):
+        sentences = re.split(r'[.!?]+', transcript.strip())
+        for sentence in sentences:
             sentence = sentence.strip()
-            if not sentence or len(sentence) < 20:
+            if not sentence or len(sentence) < self.RULES["min_sentence_length"]:
                 continue
-                
+
+            # Extract words from sentence and check for intersection with key terms
             sentence_words = set(re.findall(r'\b[a-zA-ZåäöÅÄÖ]{3,}\b', sentence.lower()))
             if sentence_words.intersection(key_terms):
                 relevant_sentences.append(sentence)
-                if len(relevant_sentences) >= 3:  # Max 3 sentences
+                if len(relevant_sentences) >= self.RULES["max_sentences_excerpt"]:  # Max 3 sentences
                     break
-        
+
         if not relevant_sentences:
             return transcript[:max_chars]
-            
+
         excerpt = " ".join(relevant_sentences)
         return excerpt[:max_chars] if len(excerpt) > max_chars else excerpt
 
@@ -100,154 +142,76 @@ REVIDERAD SAMMANFATTNING (endast JSON):"""
         excerpt = self._extract_relevant_excerpt(transcript, summary_point)
         if not excerpt:
             return False
-            
-        prompt = self.transcript_check_prompt.format(point=summary_point, excerpt=excerpt)
-        
+
+        prompt = PROMPT_VERIFY_POINT.format(point=summary_point, excerpt=excerpt)
+
         try:
-            request_payload = {
-                "model": self.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "num_ctx": 1500,
-                    "temperature": 0.0,
-                    "top_p": 0.8
-                }
-            }
-            
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=request_payload,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                verification = result.get('response', '').strip().upper()
-                return "KORREKT" in verification
-            else:
-                logger.error(f"Verification failed: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Verification error: {e}")
+            result = self._call_ollama(prompt, num_ctx=1500, temperature=0.0, top_p=0.8, timeout=30)
+            verification = result.get('response', '').strip().upper()
+            return "KORREKT" in verification
+        except requests.RequestException:
             return False
 
     def check_rules(self, summary):
         """Check summary against quality rules"""
         if not summary or not summary.strip():
             return "Sammanfattning är tom"
-            
-        prompt = self.rule_check_prompt.format(summary=summary)
-        
+
+        prompt = PROMPT_RULE_CHECK.format(summary=summary)
+
         try:
-            request_payload = {
-                "model": self.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "num_ctx": 2000,
-                    "temperature": 0.1,
-                    "top_p": 0.9
-                }
-            }
-            
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=request_payload,
-                timeout=60
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('response', '').strip()
-            else:
-                logger.error(f"Rule check failed: {response.status_code}")
-                return "Tekniskt fel vid regelanalys"
-                
-        except Exception as e:
-            logger.error(f"Rule check error: {e}")
+            result = self._call_ollama(prompt, num_ctx=2000, temperature=0.1, top_p=0.9, timeout=60)
+            return result.get('response', '').strip()
+        except requests.RequestException:
             return "Tekniskt fel vid regelanalys"
 
     def revise_summary(self, summary, broken_rules):
         """Revise summary to fix broken rules"""
-        prompt = self.revision_prompt.format(summary=summary, broken_rules=broken_rules)
-        
+        logger.info(f"Revise summary called with broken_rules: {broken_rules}")
+        prompt = PROMPT_REVISE_SUMMARY.format(summary=summary, problems=broken_rules)
+
         try:
-            request_payload = {
-                "model": self.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "num_ctx": 2500,
-                    "temperature": 0.1,
-                    "top_p": 0.9
-                }
-            }
-            
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=request_payload,
-                timeout=90
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('response', '').strip()
-            else:
-                logger.error(f"Revision failed: {response.status_code}")
-                return summary  # Return original on failure
-                
-        except Exception as e:
-            logger.error(f"Revision error: {e}")
+            result = self._call_ollama(prompt, num_ctx=2500, temperature=0.1, top_p=0.9, timeout=90)
+            return result.get('response', '').strip()
+        except requests.RequestException:
+            logger.warning("Revision failed, returning original summary")
             return summary  # Return original on failure
 
-    def perform_critique(self, summary, transcript=None):
-        """
-        Perform rule-based critique with transcript verification
-        """
-        logger.info("Performing rule-based critique with transcript verification")
-        
-        if torch and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            time.sleep(1)
-        
-        problems = []
-        
-        # Check general rules
+    def _extract_bullet_points(self, summary):
+        """Extract bullet points from summary text."""
+        if not summary:
+            return []
+        lines = summary.split('\n')
+        return [line.strip()[1:].strip() for line in lines if line.strip().startswith('-')]
+
+    def _check_rules_phase(self, summary):
+        """Phase 1: Check summary against quality rules."""
         broken_rules = self.check_rules(summary)
         if broken_rules and "alla regler uppfylls" not in broken_rules.lower():
-            problems.append(f"Regelbrott: {broken_rules}")
-        
-        # If transcript available, verify each summary point
-        transcript_problems = []
-        if transcript and summary:
-            # Extract bullet points from summary
-            lines = summary.split('\n')
-            bullet_points = []
-            for line in lines:
-                if line.strip().startswith('-'):
-                    bullet_points.append(line.strip()[1:].strip())  # Remove bullet
-            
-            # Verify each point against transcript
-            for point in bullet_points:
-                if len(point) > 10:  # Only check substantial points
-                    is_correct = self.verify_point(point, transcript)
-                    if not is_correct:
-                        transcript_problems.append(f"Verifieringsfel: {point[:50]}...")
-        
-        if transcript_problems:
-            problems.extend(transcript_problems)
-        
+            return f"Regelbrott: {broken_rules}"
+        return None
+
+    def _verify_points_phase(self, summary, transcript):
+        """Phase 2: Verify each summary point against transcript."""
+        if not transcript or not summary:
+            return []
+
+        bullet_points = self._extract_bullet_points(summary)
+        problems = []
+        for point in bullet_points:
+            is_correct = self.verify_point(point, transcript)
+            if not is_correct:
+                problems.append(f"Verifieringsfel: {point[:self.RULES['error_trunc_len']]}...")
+        return problems
+
+    def _revise_phase(self, summary, problems):
+        """Phase 3: Revise summary if problems were found."""
         if not problems:
-            logger.info("All rules passed and transcript verified")
             return summary, "Inga problem identifierade"
-        
+
         logger.info(f"Problems found: {problems}")
-        
-        # Revise if problems found
         revised = self.revise_summary(summary, "\n".join(problems))
-        
+
         # Check revised version
         second_rules = self.check_rules(revised)
         if not second_rules or "alla regler uppfylls" in second_rules.lower():
@@ -257,42 +221,74 @@ REVIDERAD SAMMANFATTNING (endast JSON):"""
             logger.warning("Revision incomplete, some rules still broken")
             return revised, f"Delvis reviderad: {second_rules}"
 
+    def perform_critique(self, summary, transcript=None):
+        """
+        Perform rule-based critique with transcript verification
+        """
+        logger.info("Performing rule-based critique with transcript verification")
+
+        if torch and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            time.sleep(1)
+
+        # Phase 1: Check rules
+        rule_problem = self._check_rules_phase(summary)
+        problems = [rule_problem] if rule_problem else []
+
+        # Phase 2: Verify points if transcript available
+        if transcript:
+            transcript_problems = self._verify_points_phase(summary, transcript)
+            problems.extend(transcript_problems)
+
+        # Phase 3: Revise if needed
+        return self._revise_phase(summary, problems)
+
+    def _calculate_rule_score(self, broken_rules):
+        """Calculate confidence score based on rule compliance."""
+        if not broken_rules or "alla regler uppfylls" in broken_rules.lower():
+            return self.RULES["confidence_thresholds"]["perfect"]
+        elif len(broken_rules) < 100:
+            return self.RULES["confidence_thresholds"]["good"]
+        elif len(broken_rules) < 200:
+            return self.RULES["confidence_thresholds"]["average"]
+        else:
+            return self.RULES["confidence_thresholds"]["poor"]
+
+    def _verify_bullet_points(self, bullet_points, transcript):
+        """Verify bullet points against transcript and return verification score."""
+        if not bullet_points or not transcript:
+            return None
+
+        verified = 0
+        total = 0
+        for point in bullet_points:
+            point_text = point[1:].strip() if point.startswith('-') else point
+            if len(point_text) > self.RULES["min_point_length"]:  # Only check substantial points
+                total += 1
+                if self.verify_point(point_text, transcript):
+                    verified += 1
+
+        return verified / total if total > 0 else None
+
     def assess_confidence(self, summary, transcript=None):
         """
         Confidence based on rule compliance and transcript verification
         """
         if not summary or not summary.strip():
             return 0.0
-            
+
         # Start with rule-based confidence
         broken_rules = self.check_rules(summary)
-        if not broken_rules or "alla regler uppfylls" in broken_rules.lower():
-            rule_score = 0.9
-        elif len(broken_rules) < 100:
-            rule_score = 0.7
-        elif len(broken_rules) < 200:
-            rule_score = 0.5
-        else:
-            rule_score = 0.3
-        
+        rule_score = self._calculate_rule_score(broken_rules)
+
         # If transcript available, add verification-based confidence
-        if transcript and summary:
-            lines = summary.split('\n')
-            bullet_points = [line.strip() for line in lines if line.strip().startswith('-')]
-            
-            if bullet_points:
-                verified = 0
-                total = 0
-                for point in bullet_points:
-                    if len(point) > 10:  # Only check substantial points
-                        total += 1
-                        if self.verify_point(point[1:].strip() if point.startswith('-') else point, transcript):
-                            verified += 1
-                
-                if total > 0:
-                    verification_score = verified / total
-                    # Combine rule score and verification score
-                    final_score = (rule_score * 0.6) + (verification_score * 0.4)
-                    return max(0.0, min(1.0, final_score))
-        
+        if transcript:
+            bullet_points = self._extract_bullet_points(summary)
+            verification_score = self._verify_bullet_points(bullet_points, transcript)
+
+            if verification_score is not None:
+                # Combine rule score and verification score
+                final_score = (rule_score * 0.6) + (verification_score * 0.4)
+                return max(0.0, min(1.0, final_score))
+
         return rule_score
