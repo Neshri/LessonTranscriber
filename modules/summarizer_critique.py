@@ -1,4 +1,3 @@
-    
 #!/usr/bin/env python3
 """
 Rule-based critique and revision system for Lesson Transcriber
@@ -59,8 +58,15 @@ EXEMPEL PÅ SVARSFORMAT:
 DITT SVAR:
 """
 
-PROMPT_REVISE_SUMMARY = """Din uppgift är att agera som en redaktör och revidera 'ORIGINAL SAMMANFATTNING' för att åtgärda de specifika problem som listas under 'PROBLEM SOM HITTADES'.
-Behåll all korrekt teknisk information men förbättra sammanfattningen enligt den givna feedbacken.
+# [REVISED] The new, much stricter revision prompt.
+PROMPT_REVISE_SUMMARY = """Din uppgift är att revidera en sammanfattning för att åtgärda en lista med specifika problem.
+Läs 'ORIGINAL SAMMANFATTNING' och 'PROBLEM SOM HITTADES'.
+Skriv sedan en ny version av sammanfattningen som åtgärdar problemen.
+
+**VIKTIGA REGLER FÖR DITT SVAR:**
+-   Svara **ENDAST** med den reviderade sammanfattningens text.
+-   Inkludera **INGA** extra rubriker, kommentarer, markdown eller förklaringar som "Här är den reviderade sammanfattningen:".
+-   Formatet på ditt svar måste vara en ren lista med punkter som börjar med '-'.
 
 ORIGINAL SAMMANFATTNING:
 {summary}
@@ -96,7 +102,6 @@ Svara ENDAST med ett JSON-objekt som i detta exempel:
 {{"score": 4}}
 """
 
-# [NEW] A set of common Swedish stop words for a fast, grammatical language check.
 SWEDISH_STOP_WORDS = {
     'och', 'det', 'att', 'i', 'en', 'jag', 'hon', 'han', 'den', 'för', 'med', 'var', 'som', 'på', 'är',
     'av', 'till', 'ett', 'de', 'så', 'vi', 'inte', 'om', 'kan', 'ska', 'blir'
@@ -116,8 +121,6 @@ class CritiqueSummarizer:
         self.max_revisions = config.get('max_revisions', 3)
         self.max_retries = config.get('max_retries', 3)
         self.initial_backoff = config.get('initial_backoff_seconds', 5)
-
-        # Centralized configuration for all LLM calls
         self.timeouts = {
             "verify": config.get("timeout_verify", 120),
             "revise": config.get("timeout_revise", 120),
@@ -164,7 +167,6 @@ class CritiqueSummarizer:
         prompt = PROMPT_VERIFIERA_PUNKT.format(point=summary_point, text_chunk=text_chunk)
         response_text = ""
         try:
-            # [CORRECTED] Using centralized config
             result = self._call_ollama(
                 prompt,
                 num_ctx=self.num_ctx["verify"],
@@ -185,13 +187,13 @@ class CritiqueSummarizer:
 
     def revise_summary(self, summary, problem_string):
         prompt = PROMPT_REVISE_SUMMARY.format(summary=summary, problems=problem_string)
-        # [CORRECTED] Using centralized config
         result = self._call_ollama(
             prompt,
             num_ctx=self.num_ctx["revise"],
             temperature=self.llm_params["revise_temp"],
             timeout=self.timeouts["revise"]
         )
+        # The new prompt should only return the raw summary text.
         revised = result.get('response', '').strip()
         if not revised:
             logger.warning("Revision attempt produced an empty summary. Returning original.")
@@ -205,7 +207,6 @@ class CritiqueSummarizer:
         prompt = PROMPT_ASSESS_QUALITY.format(summary=summary)
         response_text = ""
         try:
-            # [CORRECTED] Using centralized config
             result = self._call_ollama(
                 prompt,
                 num_ctx=self.num_ctx["quality_assess"],
@@ -238,15 +239,12 @@ class CritiqueSummarizer:
             logger.info(f"--- Iteration {i+1}/{self.max_revisions + 1} ---")
             found_problems = []
             try:
-                # Phase 1: Structure
                 structural_report = self._assess_structural_integrity(current_summary)
                 if structural_report["problems"]:
                     logger.warning(f"Phase 1 failed: Found {len(structural_report['problems'])} structural problems.")
                     found_problems.extend(structural_report["problems"])
                 else:
                     logger.info("Phase 1 passed: Structure is OK.")
-                    
-                    # Phase 2: Facts
                     if transcript:
                         assessment = self._recursive_factual_assessment(current_summary, transcript)
                         last_factual_assessment = assessment
@@ -256,8 +254,6 @@ class CritiqueSummarizer:
                                 found_problems.append(f"Verifieringsfel: Punkten '{point}' kunde inte verifieras.")
                         else:
                             logger.info("Phase 2 passed: All points verified.")
-                            
-                            # Phase 3: Quality
                             qualitative_problems = self._assess_qualitative_issues(current_summary)
                             if qualitative_problems:
                                  logger.warning(f"Phase 3 failed: Found {len(qualitative_problems)} qualitative problems.")
@@ -323,7 +319,7 @@ class CritiqueSummarizer:
         return {"score": score, "verified_points": list(verified_points_set), "failed_points": list(failed_points_set)}
 
     def _assess_structural_integrity(self, summary):
-        """[REVISED] Uses a robust stop-word heuristic for the language check."""
+        """Uses a robust stop-word heuristic for the language check."""
         problems = []
         rules_passed = 0
         total_rules = 3
@@ -397,7 +393,6 @@ class CritiqueSummarizer:
     def _assess_linguistic_quality(self, summary):
         response_text = ""
         try:
-            # [CORRECTED] Using centralized config
             result = self._call_ollama(
                 prompt=PROMPT_BETYGSÄTT_SPRÅK.format(summary=summary),
                 num_ctx=self.num_ctx["quality_score"],
@@ -412,5 +407,3 @@ class CritiqueSummarizer:
         except (json.JSONDecodeError, KeyError):
             logger.error(f"Failed to parse linguistic quality score. Full response text: '{response_text}'", exc_info=True)
             return 0.5
-
-  
