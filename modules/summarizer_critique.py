@@ -220,7 +220,7 @@ class CritiqueSummarizer:
 
     def _recursive_factual_assessment(self, summary, transcript):
         """
-        [REVISED] Now includes a defensive sub-batching mechanism to prevent context overflow.
+        [FINAL CORRECTED VERSION] Includes a fix for the oversized point bug in sub-batching.
         """
         logger.info("Starting recursive factual correctness assessment (batch citation mode)...")
         all_bullet_points = self._extract_bullet_points(summary)
@@ -232,10 +232,12 @@ class CritiqueSummarizer:
         
         globally_verified_points = set()
         
-        # Determine the maximum token space available for the points list in the prompt
-        max_tokens_for_points = self.num_ctx["verify"] - self._estimate_token_count(transcript_chunks[0]) - self.prompt_template_buffer
+        # Estimate token count for a chunk once.
+        chunk_token_estimate = self._estimate_token_count(transcript_chunks[0]) if transcript_chunks else 0
+        max_tokens_for_points = self.num_ctx["verify"] - chunk_token_estimate - self.prompt_template_buffer
+
         if max_tokens_for_points <= 0:
-            logger.error("Chunk size is too large for the verification context window. Reduce chunk_size or increase ctx_verify.")
+            logger.error(f"Chunk size ({self.chunk_size} chars) is too large for the verification context window ({self.num_ctx['verify']} tokens). Reduce chunk_size or increase ctx_verify.")
             return {"score": 0.0, "verified_points": [], "failed_points": all_bullet_points}
 
         for i, chunk in enumerate(transcript_chunks):
@@ -246,27 +248,34 @@ class CritiqueSummarizer:
                 
             logger.debug(f"Verifying {len(points_to_check)} remaining point(s) against chunk {i+1}/{len(transcript_chunks)}...")
             
-            # [NEW] Sub-batching logic to prevent context overflow
             current_sub_batch = []
             for point in points_to_check:
-                current_sub_batch.append(point)
-                # Check if the current sub-batch is getting too large
-                batch_json = json.dumps(current_sub_batch, ensure_ascii=False)
-                if self._estimate_token_count(batch_json) > max_tokens_for_points:
-                    # The batch is full (excluding the latest point). Send it.
-                    points_to_send = current_sub_batch[:-1]
-                    verifications_in_sub_batch = self._verify_points_against_chunk(points_to_send, chunk)
-                    if verifications_in_sub_batch:
-                        newly_verified = {item['point'] for item in verifications_in_sub_batch if 'point' in item}
-                        globally_verified_points.update(newly_verified)
-                    # The new batch starts with the point that didn't fit.
-                    current_sub_batch = [point]
+                # [CORRECTED LOGIC] First, check if the point itself is too big to ever be processed.
+                point_token_estimate = self._estimate_token_count(json.dumps([point]))
+                if point_token_estimate > max_tokens_for_points:
+                    logger.warning(f"A single bullet point is too long to fit in the context window and cannot be verified. Point: '{point}'")
+                    continue # Skip this point entirely; it will remain in the failed set.
 
-            # Send the final sub-batch which was not full
+                # Second, check if adding this point would make the current batch too big.
+                potential_batch = current_sub_batch + [point]
+                batch_json = json.dumps(potential_batch, ensure_ascii=False)
+                if self._estimate_token_count(batch_json) > max_tokens_for_points:
+                    # If the potential batch is too big, send the *current* batch (which we know fits).
+                    verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
+                    if verifications_in_sub_batch:
+                        newly_verified = {item['point'] for item in verifications_in_sub_batch}
+                        globally_verified_points.update(newly_verified)
+                    # The new batch starts with the current point.
+                    current_sub_batch = [point]
+                else:
+                    # The point fits, so add it to the batch for the next iteration.
+                    current_sub_batch = potential_batch
+
+            # After the loop, send any remaining points in the final sub-batch.
             if current_sub_batch:
                 verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
                 if verifications_in_sub_batch:
-                    newly_verified = {item['point'] for item in verifications_in_sub_batch if 'point' in item}
+                    newly_verified = {item['point'] for item in verifications_in_sub_batch}
                     globally_verified_points.update(newly_verified)
 
         all_points_set = set(all_bullet_points)
@@ -279,7 +288,11 @@ class CritiqueSummarizer:
         score = len(globally_verified_points) / len(all_bullet_points) if all_bullet_points else 0.0
         logger.info(f"Factual correctness score: {score:.2f} ({len(globally_verified_points)}/{len(all_bullet_points)} points verified)")
         
-        return {"score": score, "verified_points": list(globally_verified_points), "failed_points": failed_points}
+        return {
+            "score": score,
+            "verified_points": list(globally_verified_points),
+            "failed_points": failed_points
+        }
 
     # --- All other methods are unchanged ---
     def revise_summary(self, summary, problem_string):
