@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Rule-based critique and revision system for Lesson Transcriber
-Analyzes summaries against quality rules and revises until they pass
+Analyzes summaries against quality rules and revises until they pass.
+This version implements a true iterative revision loop for maximum accuracy.
 """
 
 import logging
 import requests
 import json
 import time
-import textwrap
 import re
 
 logger = logging.getLogger(__name__)
@@ -18,33 +18,52 @@ try:
 except ImportError:
     torch = None
 
-# Module-level prompt constants
-PROMPT_RULE_CHECK = """Analysera sammanfattning mot dessa kvalitetsregler:
+# [REVISED] Prompts are now fully integrated and cleaned up.
+PROMPT_ASSESS_QUALITY = """
+Du är en noggrann redaktör som granskar en lektionssammanfattning.
+Din uppgift är att bedöma sammanfattningens interna kvalitet baserat ENBART på texten nedan, utan tillgång till originaltranskriptet.
 
-REGLER:
-1. Teknisk korrekthet: Tekniska termer måste vara korrekta
-2. Logisk struktur: Sammanfattning måste vara logiskt sammanhängande
-3. Punktform: Innehåll måste vara organiserat i punktform med bindestreck
-4. Relevant innehåll: Endast viktiga ämnen från lektionen
-5. Språklig korrekthet: Svensk text utan grammatiska fel
-6. Längd: Kortfattad men komplett (6-8 punkter)
+Följ dessa steg:
+1.  Granska sammanfattningen mot de kvalitetsregler som listas nedan.
+2.  För varje regel, resonera kort i fältet "motivering" om varför den uppfylls eller inte.
+3.  Ge en samlad bedömning i en enda mening.
+4.  Svara ENDAST med ett JSON-objekt i det specificerade formatet.
+
+KVALITETSREGLER (INTERN ANALYS):
+1.  **Logisk Följd:** Är punkterna presenterade i en logisk och sammanhängande ordning? Känns flödet naturligt?
+2.  **Språklig Kvalitet:** Är språket tydligt, koncist och fritt från uppenbara grammatiska fel eller klumpiga formuleringar?
+3.  **Tydlighet och Abstraktion:** Är varje punkt klar och lättförståelig? Har sammanfattningen en lämplig abstraktionsnivå, eller är den för detaljerad eller för vag?
 
 SAMMANFATTNING:
 {summary}
 
-BEDÖMNING: Lista endast reglerna som inte uppfylls."""
+EXEMPEL PÅ SVARSFORMAT:
+{{
+  "samlad_bedomning": "Sammanfattningen har ett bra flöde men en av punkterna är otydligt formulerad.",
+  "regelanalys": [
+    {{
+      "regel": "Logisk Följd",
+      "status": "UPPFYLLD",
+      "motivering": "Punkterna följer en kronologisk och logisk ordning som är lätt att följa."
+    }},
+    {{
+      "regel": "Språklig Kvalitet",
+      "status": "UPPFYLLD",
+      "motivering": "Språket är korrekt och professionellt."
+    }},
+    {{
+      "regel": "Tydlighet och Abstraktion",
+      "status": "BRUTEN",
+      "motivering": "Den tredje punkten är för vag och använder oklara termer som 'diverse system'."
+    }}
+  ]
+}}
 
-PROMPT_VERIFY_POINT = """Kontrollera denna punkt från sammanfattning mot transkript. Verifiera att påståendet faktiskt finns i transkriptet.
+DITT SVAR:
+"""
 
-SAMMANFATTNING PUNKT:
-{point}
-
-TRANSKRIPT UTDDRAG:
-{excerpt}
-
-VERIFIERING: Endast "KORREKT" om påståendet finns i transkriptet, annars "FEL"."""
-
-PROMPT_REVISE_SUMMARY = """Revidera sammanfattning för att uppfylla ALLA kvalitetsregler. Behåll all teknisk information men förbättra struktur, korrekthet och språk.
+PROMPT_REVISE_SUMMARY = """Din uppgift är att agera som en redaktör och revidera 'ORIGINAL SAMMANFATTNING' för att åtgärda de specifika problem som listas under 'PROBLEM SOM HITTADES'.
+Behåll all korrekt teknisk information men förbättra sammanfattningen enligt den givna feedbacken.
 
 ORIGINAL SAMMANFATTNING:
 {summary}
@@ -57,270 +76,260 @@ REVIDERAD SAMMANFATTNING:"""
 
 class CritiqueSummarizer:
     """
-    Rule-based critique and revision system
+    Rule-based critique and revision system with robust confidence scoring.
     """
-    # Class-level constants for rules and thresholds
-    RULES = {
-        "length": "6-8 punkter",
-        "confidence_thresholds": {
-            "perfect": 0.9,
-            "good": 0.7,
-            "average": 0.5,
-            "poor": 0.3
-        },
-        "min_point_length": 10,
-        "max_sentences_excerpt": 5,
-        "min_sentence_length": 20,
-        "error_trunc_len": 100
-    }
+    RULES = {"length_range": "6-8"}
+    PROMPT_VERIFIERA_PUNKT = """
+    Din uppgift är att verifiera om 'SAMMANFATTNINGSPUNKT' har faktabaserat stöd i 'TEXTUTDRAG'.
+    Följ dessa steg:
+    1.  Läs SAMMANFATTNINGSPUNKT.
+    2.  Läs TEXTUTDRAG noggrant för att hitta meningar som direkt stödjer punkten.
+    3.  Om du hittar direkta bevis, extrahera den stödjande meningen/meningarna ordagrant till fältet "quote".
+    4.  Baserat på bevisen, avgör om punkten är "KORREKT" eller "FEL".
+    TEXTUTDRAG:
+    {text_chunk}
+    SAMMANFATTNINGSPUNKT:
+    {point}
+    Svara ENDAST med JSON i detta format:
+    {{"quote": "Den exakta meningen från texten...", "decision": "KORREKT"}}
+    Om inget stödjande citat kan hittas, svara så här:
+    {{"quote": "", "decision": "FEL"}}
+    """
+    PROMPT_BETYGSÄTT_SPRÅK = """
+    Du är en expert på svenska språket. Betygsätt följande sammanfattning på en skala från 1 till 5 baserat på dess språkliga kvalitet.
+    KRITERIER:
+    - Grammatisk korrekthet, Tydlighet och koncishet, Naturligt språkflöde
+    SAMMANFATTNING:
+    {summary}
+    Svara ENDAST med ett JSON-objekt som i detta exempel:
+    {{"score": 4}}
+    """
 
     def __init__(self, config):
         self.config = config
         self.ollama_url = config['ollama_url']
         self.ollama_model = config['ollama_model']
         self.max_context_tokens = config.get('max_context_tokens', 4096)
+        self.chunk_size = config.get('chunk_size_chars', 1500)
+        self.chunk_overlap = config.get('chunk_overlap_chars', 200)
+        self.max_revisions = config.get('max_revisions', 3)
 
     def _call_ollama(self, prompt, num_ctx, temperature, top_p=0.8, timeout=90):
-        """Helper method to handle Ollama request payload construction and posting."""
         request_payload = {
-            "model": self.ollama_model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "num_ctx": num_ctx,
-                "temperature": temperature,
-                "top_p": top_p
-            }
+            "model": self.ollama_model, "prompt": prompt, "stream": False,
+            "options": {"num_ctx": num_ctx, "temperature": temperature, "top_p": top_p}
         }
-
         try:
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=request_payload,
-                timeout=timeout
-            )
-            response.raise_for_status()  # Raise exception for bad status codes
+            response = requests.post(f"{self.ollama_url}/api/generate", json=request_payload, timeout=timeout)
+            response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
-            logger.error(f"Ollama request failed: {e}")
+            logger.error(f"Ollama request failed: {e}", exc_info=True)
             raise
 
-    def _extract_relevant_excerpt(self, transcript, summary_point, max_chars=400):
-        """Extract specific excerpt relevant to a summary point"""
-        if not transcript or not summary_point:
-            return ""
-
-        # Extract key terms from the specific summary point using regex for Swedish words (>=3 chars)
-        key_terms = set(re.findall(r'\b[a-zA-ZåäöÅÄÖ]{3,}\b', summary_point.lower()))
-
-        if not key_terms:
-            # Fallback: take first 400 chars if no key terms found
-            return transcript[:max_chars]
-
-        # Find sentences containing key terms by splitting transcript on sentence endings
-        relevant_sentences = []
-        sentences = re.split(r'[.!?]+', transcript.strip())
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence or len(sentence) < self.RULES["min_sentence_length"]:
-                continue
-
-            # Extract words from sentence and check for intersection with key terms
-            sentence_words = set(re.findall(r'\b[a-zA-ZåäöÅÄÖ]{3,}\b', sentence.lower()))
-            if sentence_words.intersection(key_terms):
-                relevant_sentences.append(sentence)
-                if len(relevant_sentences) >= self.RULES["max_sentences_excerpt"]:  # Max 5 sentences
-                    break
-
-        if not relevant_sentences:
-            return transcript[:max_chars]
-
-        excerpt = " ".join(relevant_sentences)
-        return excerpt[:max_chars] if len(excerpt) > max_chars else excerpt
-
-    def verify_point(self, summary_point, transcript):
-        """Verify a single summary point against transcript with robust parsing."""
-        excerpt = self._extract_relevant_excerpt(transcript, summary_point)
-        if not excerpt:
-            return False
-
-        prompt = PROMPT_VERIFY_POINT.format(point=summary_point, excerpt=excerpt)
-
+    def verify_point_against_chunk(self, summary_point, text_chunk):
+        prompt = self.PROMPT_VERIFIERA_PUNKT.format(point=summary_point, text_chunk=text_chunk)
+        response_text = ""
         try:
-            result = self._call_ollama(prompt, num_ctx=1500, temperature=0.0, top_p=0.8, timeout=30)
-            verification = result.get('response', '').strip().upper()
-
-            # Robust Logic:
-            # 1. Check if "FEL" (incorrect) is explicitly stated. If so, it's definitively false.
-            # 2. Otherwise, check if "KORREKT" (correct) is present.
-            # This prevents a response like "Jag är inte säker, men det verkar inte FEL" from passing.
-            has_fel = "FEL" in verification
-            has_korrekt = "KORREKT" in verification
-
-            if has_fel:
-                return False  # Prioritize "FEL" to be safe.
-            if has_korrekt:
-                return True   # If "FEL" is not present, "KORREKT" is a clear signal.
-            
-            logger.warning(f"Ambiguous verification response: '{verification}'. Defaulting to FEL.")
-            return False # If neither is present, the response is ambiguous. Fail safely.
-
+            result = self._call_ollama(prompt, num_ctx=2000, temperature=0.0, timeout=45)
+            response_text = result.get('response', '{}').strip()
+            response_json = json.loads(response_text)
+            decision = response_json.get("decision", "").upper()
+            quote = response_json.get("quote", "")
+            return decision == "KORREKT" and bool(quote)
         except requests.RequestException:
             return False
-
-    def check_rules(self, summary):
-        """Check summary against quality rules"""
-        if not summary or not summary.strip():
-            return "Sammanfattning är tom"
-
-        prompt = PROMPT_RULE_CHECK.format(summary=summary)
-
-        try:
-            result = self._call_ollama(prompt, num_ctx=2000, temperature=0.1, top_p=0.9, timeout=60)
-            return result.get('response', '').strip()
-        except requests.RequestException:
-            return "Tekniskt fel vid regelanalys"
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse JSON from verification response. Full response text: '{response_text}'", exc_info=True)
+            return False
 
     def revise_summary(self, summary, problem_string):
-        """Revise summary to fix broken rules"""
         prompt = PROMPT_REVISE_SUMMARY.format(summary=summary, problems=problem_string)
-
         try:
-            result = self._call_ollama(prompt, num_ctx=2500, temperature=0.1, top_p=0.9, timeout=90)
+            result = self._call_ollama(prompt, num_ctx=3000, temperature=0.1, timeout=120)
             revised = result.get('response', '').strip()
-            logger.debug(f"Revised summary: {revised[:200]}...")
+            if not revised:
+                logger.warning("Revision attempt produced an empty summary. Returning original.")
+                return summary
+            logger.debug("Full revised summary:\n%s", revised)
             return revised
         except requests.RequestException:
-            logger.warning("Revision failed, returning original summary")
-            return summary  # Return original on failure
+            logger.error("Summary revision failed due to an API error.")
+            raise
 
     def _extract_bullet_points(self, summary):
-        """Extract bullet points from summary text."""
-        if not summary:
-            return []
+        if not summary: return []
         lines = summary.split('\n')
         return [line.strip()[1:].strip() for line in lines if line.strip().startswith('-')]
 
-    def _check_rules_phase(self, summary):
-        """Phase 1: Check summary against quality rules."""
-        broken_rules = self.check_rules(summary)
-        if broken_rules and "alla regler uppfylls" not in broken_rules.lower():
-            return f"Regelbrott: {broken_rules}"
-        return None
+    def _chunk_transcript(self, text):
+        if len(text) <= self.chunk_size: return [text]
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + self.chunk_size
+            chunks.append(text[start:end])
+            start += self.chunk_size - self.chunk_overlap
+        return chunks
 
-    def _verify_points_phase(self, summary, transcript):
-        """Phase 2: Verify each summary point against transcript."""
-        if not transcript or not summary:
-            return []
-
+    def _recursive_factual_assessment(self, summary, transcript):
+        logger.info("Starting recursive factual correctness assessment...")
         bullet_points = self._extract_bullet_points(summary)
+        if not bullet_points:
+            return {"score": 0.0, "verified_points": [], "failed_points": []}
+        transcript_chunks = self._chunk_transcript(transcript)
+        logger.info(f"Divided transcript into {len(transcript_chunks)} overlapping chunks.")
+        verified_points_set, failed_points_set = set(), set()
+        for i, point in enumerate(bullet_points):
+            logger.debug(f"Verifying point {i+1}/{len(bullet_points)}: '{point}'")
+            is_point_verified = any(self.verify_point_against_chunk(point, chunk) for chunk in transcript_chunks)
+            if is_point_verified:
+                verified_points_set.add(point)
+            else:
+                logger.warning(f"Point FAILED verification across all chunks: '{point}'")
+                failed_points_set.add(point)
+        score = len(verified_points_set) / len(bullet_points) if bullet_points else 0.0
+        logger.info(f"Factual correctness score: {score:.2f} ({len(verified_points_set)}/{len(bullet_points)} points verified)")
+        return {"score": score, "verified_points": list(verified_points_set), "failed_points": list(failed_points_set)}
+
+    def _assess_structural_integrity(self, summary):
         problems = []
-        for point in bullet_points:
-            is_correct = self.verify_point(point, transcript)
-            if not is_correct:
-                logger.debug(f"Point verification failed: {point}")
-                # Return the point itself along with the error message
-                problem_detail = {
-                    "point": point,
-                    "error": f"Verifieringsfel: Innehållet kunde inte verifieras mot transkriptet."
-                }
-                problems.append(problem_detail)
+        bullet_points = self._extract_bullet_points(summary)
+        try:
+            range_str = self.RULES.get("length_range", "6-8")
+            min_len, max_len = map(int, range_str.split('-'))
+            if not (min_len <= len(bullet_points) <= max_len):
+                problems.append(f"Strukturellt fel: Fel antal punkter. Sammanfattningen har {len(bullet_points)} punkter, men förväntar sig {range_str}.")
+        except (ValueError, IndexError):
+             logger.warning(f"Could not parse length_range rule: '{self.RULES.get('length_range')}'")
+        non_empty_lines = [line for line in summary.split('\n') if line.strip()]
+        if not all(line.startswith('-') for line in non_empty_lines):
+            problems.append("Strukturellt fel: Inte alla rader är korrekta punkter som börjar med '-'.")
         return problems
 
-    def _revise_phase(self, summary, problems, transcript=None):
-        if not problems:
-            return summary, []
+    def _assess_qualitative_issues(self, summary):
+        """[NEW] Uses the PROMPT_ASSESS_QUALITY to find subjective flaws in a summary."""
+        logger.info("Assessing qualitative issues (logic, clarity, language)...")
+        problems = []
+        prompt = PROMPT_ASSESS_QUALITY.format(summary=summary)
+        response_text = ""
+        try:
+            result = self._call_ollama(prompt, num_ctx=2500, temperature=0.1)
+            response_text = result.get('response', '{}').strip()
+            response_json = json.loads(response_text)
+            
+            rule_analysis = response_json.get("regelanalys", [])
+            for item in rule_analysis:
+                if item.get("status") == "BRUTEN":
+                    problem_desc = f"Kvalitetsbrist ({item.get('regel', 'Okänd regel')}): {item.get('motivering', 'Ingen motivering angiven.')}"
+                    problems.append(problem_desc)
+            return problems
+        except requests.RequestException:
+            logger.warning("Could not assess qualitative issues due to API error.")
+            return [] # Return no problems on API failure to avoid halting the process
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse JSON from quality assessment response. Full response text: '{response_text}'", exc_info=True)
+            return [] # Return no problems on parsing failure
 
-        problem_string = ""
-        for problem in problems:
-            # Check if it's a verification problem (a dict) or a rule problem (a string)
-            if isinstance(problem, dict):
-                point = problem['point']
-                error = problem['error']
-                # For each failed point, find its specific context in the transcript
-                context_excerpt = self._extract_relevant_excerpt(transcript, point, max_chars=600)
-                problem_string += f"- PUNKT: \"{point}\"\n  FEL: {error}\n  RELEVANT KONTEXT: \"{context_excerpt}\"\n\n"
-            else: # It's a rule problem string
-                problem_string += f"- ALLMÄNT FEL: {problem}\n\n"
-
-        logger.info(f"Problems with context prepared for revision:\n{problem_string}")
-        revised = self.revise_summary(summary, problem_string) # revise_summary just needs to format the prompt now
-
-        # ... (rest of the function to check the revised version) ...
-        return revised, problems # Return the original list of problem dicts/strings
-
+    # --- THE REFINED REVISION LOOP ---
+    
     def perform_critique(self, summary, transcript=None):
         """
-        Perform rule-based critique with transcript verification
+        [REWRITTEN] Implements a true 3-phase iterative revision loop:
+        1. Structure -> 2. Facts -> 3. Quality
         """
-        logger.info("Performing rule-based critique with transcript verification")
+        logger.info("--- Starting new 3-phase critique and revision cycle ---")
+        current_summary = summary
+        final_problems = []
+        
+        for i in range(self.max_revisions + 1):
+            logger.info(f"--- Iteration {i+1}/{self.max_revisions + 1} ---")
+            found_problems = []
 
-        if torch and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            time.sleep(1)
+            # Phase 1: Check Structure (Fast, Programmatic)
+            structural_problems = self._assess_structural_integrity(current_summary)
+            if structural_problems:
+                logger.warning(f"Phase 1 failed: Found {len(structural_problems)} structural problems.")
+                found_problems.extend(structural_problems)
+            else:
+                logger.info("Phase 1 passed: Structure is OK.")
+                
+                # Phase 2: Check Facts (Slow, Expensive)
+                if transcript:
+                    assessment = self._recursive_factual_assessment(current_summary, transcript)
+                    if assessment["failed_points"]:
+                        logger.warning(f"Phase 2 failed: Found {len(assessment['failed_points'])} unverified points.")
+                        for point in assessment["failed_points"]:
+                            found_problems.append(f"Verifieringsfel: Punkten '{point}' kunde inte verifieras mot transkriptet.")
+                    else:
+                        logger.info("Phase 2 passed: All points verified against transcript.")
+                        
+                        # Phase 3: Check Quality (Subjective) - only if structure and facts are OK
+                        qualitative_problems = self._assess_qualitative_issues(current_summary)
+                        if qualitative_problems:
+                             logger.warning(f"Phase 3 failed: Found {len(qualitative_problems)} qualitative problems.")
+                             found_problems.extend(qualitative_problems)
+                        else:
+                            logger.info("Phase 3 passed: Quality assessment is OK.")
+                else:
+                    logger.info("No transcript provided, skipping factual and qualitative checks.")
 
-        # Phase 1: Check rules
-        logger.debug("Starting Phase 1: Rule checking")
-        rule_problem = self._check_rules_phase(summary)
-        problems = [rule_problem] if rule_problem else []
-        logger.debug(f"Rule problems: {problems}")
+            # Decision Point
+            if not found_problems:
+                logger.info("Summary passed all 3 phases. Revision cycle complete.")
+                return current_summary, []
 
-        # Phase 2: Verify points if transcript available
-        if transcript:
-            logger.debug("Starting Phase 2: Point verification")
-            transcript_problems = self._verify_points_phase(summary, transcript)
-            problems.extend(transcript_problems)
-            logger.debug(f"Total problems after verification: {len(problems)}")
+            final_problems = found_problems
+            logger.warning(f"Current summary failed checks. Problems found:\n- " + "\n- ".join(final_problems))
 
-        # Phase 3: Revise if needed
-        return self._revise_phase(summary, problems, transcript)
+            if i < self.max_revisions:
+                logger.info(f"Attempting revision {i+1}...")
+                problem_string = "\n".join(f"- {p}" for p in final_problems)
+                try:
+                    current_summary = self.revise_summary(current_summary, problem_string)
+                except requests.RequestException:
+                    logger.error("API error during revision. Aborting cycle.")
+                    return current_summary, final_problems
+            else:
+                logger.error(f"Maximum revisions ({self.max_revisions}) reached. Aborting.")
+                break
 
-    def _calculate_rule_score(self, broken_rules):
-        """Calculate confidence score based on rule compliance."""
-        if not broken_rules or "alla regler uppfylls" in broken_rules.lower():
-            return self.RULES["confidence_thresholds"]["perfect"]
-        elif len(broken_rules) < 100:
-            return self.RULES["confidence_thresholds"]["good"]
-        elif len(broken_rules) < 200:
-            return self.RULES["confidence_thresholds"]["average"]
-        else:
-            return self.RULES["confidence_thresholds"]["poor"]
+        return current_summary, final_problems
 
-    def _verify_bullet_points(self, bullet_points, transcript):
-        """Verify bullet points against transcript and return verification score."""
-        if not bullet_points or not transcript:
-            return None
+    # --- Confidence score methods ---
 
-        verified = 0
-        total = 0
-        for point in bullet_points:
-            point_text = point[1:].strip() if point.startswith('-') else point
-            if len(point_text) > self.RULES["min_point_length"]:  # Only check substantial points
-                total += 1
-                if self.verify_point(point_text, transcript):
-                    verified += 1
-
-        return verified / total if total > 0 else None
-
-    def assess_confidence(self, summary, transcript=None):
-        """
-        Confidence based on rule compliance and transcript verification
-        """
+    def get_robust_confidence_score(self, summary, transcript=None):
         if not summary or not summary.strip():
-            return 0.0
-
-        # Start with rule-based confidence
-        broken_rules = self.check_rules(summary)
-        rule_score = self._calculate_rule_score(broken_rules)
-
-        # If transcript available, add verification-based confidence
+            return {"final_confidence": 0.0, "component_scores": {}, "failed_points": []}
+        fact_score, failed_points = 0.0, []
         if transcript:
-            bullet_points = self._extract_bullet_points(summary)
-            verification_score = self._verify_bullet_points(bullet_points, transcript)
-
-            if verification_score is not None:
-                # Combine rule score and verification score
-                final_score = (rule_score * 0.6) + (verification_score * 0.4)
-                return max(0.0, min(1.0, final_score))
-
-        return rule_score
+            assessment = self._recursive_factual_assessment(summary, transcript)
+            fact_score, failed_points = assessment["score"], assessment["failed_points"]
+        struct_score_val = 1.0 if not self._assess_structural_integrity(summary) else 0.0
+        ling_score = self._assess_linguistic_quality(summary)
+        weights = {"factual": 0.60, "structural": 0.25, "linguistic": 0.15}
+        final_score = (fact_score * weights["factual"]) + (struct_score_val * weights["structural"]) + (ling_score * weights["linguistic"])
+        if not transcript:
+            total_weight_without_factual = weights["structural"] + weights["linguistic"]
+            final_score = final_score / total_weight_without_factual if total_weight_without_factual > 0 else 0.0
+        return {
+            "final_confidence": round(final_score, 3),
+            "component_scores": {
+                "factual_correctness": round(fact_score, 3),
+                "structural_integrity": round(struct_score_val, 3),
+                "linguistic_quality": round(ling_score, 3)
+            }, "failed_points": failed_points }
+            
+    def _assess_linguistic_quality(self, summary):
+        response_text = ""
+        try:
+            prompt = self.PROMPT_BETYGSÄTT_SPRÅK.format(summary=summary)
+            result = self._call_ollama(prompt, num_ctx=1500, temperature=0.1)
+            response_text = result.get('response', '{}').strip()
+            response_json = json.loads(response_text)
+            score = response_json.get("score", 3)
+            return (score - 1) / 4
+        except requests.RequestException: return 0.5
+        except (json.JSONDecodeError, KeyError):
+            logger.error(f"Failed to parse linguistic quality score. Full response text: '{response_text}'", exc_info=True)
+            return 0.5
