@@ -159,8 +159,11 @@ class CritiqueSummarizer:
             "quality_assess": config.get("ctx_quality_assess", 2500),
             "quality_score": config.get("ctx_quality_score", 1500)
         }
+        # [NEW] A buffer to leave room for the rest of the prompt template
+        self.prompt_template_buffer = 400 
 
     def _call_ollama(self, prompt, num_ctx, temperature, top_p=0.8, timeout=90):
+        # ... (Implementation unchanged)
         request_payload = {
             "model": self.ollama_model, "prompt": prompt, "stream": False,
             "options": {"num_ctx": num_ctx, "temperature": temperature, "top_p": top_p}
@@ -184,46 +187,25 @@ class CritiqueSummarizer:
         raise Exception("Ollama request failed after all retries.")
 
     def _verify_points_against_chunk(self, points_to_check, text_chunk):
-        """
-        [REVISED] Verifies a batch of points against a single chunk, requiring a citation for each.
-        Returns a list of verification objects ({'point': str, 'quote': str}).
-        """
+        # ... (Implementation unchanged)
         if not points_to_check:
             return []
-
         points_json_list = json.dumps(points_to_check, ensure_ascii=False, indent=2)
-        
-        prompt = PROMPT_BATCH_VERIFY_AND_CITE.format(
-            text_chunk=text_chunk,
-            points_json_list=points_json_list
-        )
+        prompt = PROMPT_BATCH_VERIFY_AND_CITE.format(text_chunk=text_chunk, points_json_list=points_json_list)
         response_text = ""
         try:
-            result = self._call_ollama(
-                prompt,
-                num_ctx=self.num_ctx["verify"],
-                temperature=self.llm_params["verify_temp"],
-                timeout=self.timeouts["verify"]
-            )
+            result = self._call_ollama(prompt, num_ctx=self.num_ctx["verify"], temperature=self.llm_params["verify_temp"], timeout=self.timeouts["verify"])
             response_text = result.get('response', '{}').strip()
-            # Handle potential markdown code blocks
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
                 if response_text.endswith("```"):
                     response_text = response_text[:-3]
-            
             response_json = json.loads(response_text)
-            
             verifications = response_json.get("verifications", [])
             if not isinstance(verifications, list):
                 logger.warning(f"LLM returned a non-list for verifications: {verifications}")
                 return []
-                
-            valid_verifications = [
-                item for item in verifications 
-                if isinstance(item, dict) and 'point' in item and 'quote' in item
-            ]
-            
+            valid_verifications = [item for item in verifications if isinstance(item, dict) and 'point' in item and 'quote' in item]
             return valid_verifications
         except requests.RequestException:
             logger.error("Batch verification failed after all retries.")
@@ -231,37 +213,95 @@ class CritiqueSummarizer:
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON from batch verification response. Full response text: '{response_text}'", exc_info=True)
             return []
+    
+    def _estimate_token_count(self, text):
+        """A simple heuristic to estimate token count. 1 token ~= 4 chars."""
+        return len(text) // 4
 
+    def _recursive_factual_assessment(self, summary, transcript):
+        """
+        [REVISED] Now includes a defensive sub-batching mechanism to prevent context overflow.
+        """
+        logger.info("Starting recursive factual correctness assessment (batch citation mode)...")
+        all_bullet_points = self._extract_bullet_points(summary)
+        if not all_bullet_points:
+            return {"score": 1.0, "verified_points": [], "failed_points": []}
+
+        transcript_chunks = self._chunk_transcript(transcript)
+        logger.info(f"Divided transcript into {len(transcript_chunks)} overlapping chunks.")
+        
+        globally_verified_points = set()
+        
+        # Determine the maximum token space available for the points list in the prompt
+        max_tokens_for_points = self.num_ctx["verify"] - self._estimate_token_count(transcript_chunks[0]) - self.prompt_template_buffer
+        if max_tokens_for_points <= 0:
+            logger.error("Chunk size is too large for the verification context window. Reduce chunk_size or increase ctx_verify.")
+            return {"score": 0.0, "verified_points": [], "failed_points": all_bullet_points}
+
+        for i, chunk in enumerate(transcript_chunks):
+            points_to_check = [p for p in all_bullet_points if p not in globally_verified_points]
+            if not points_to_check:
+                logger.info("All points have been verified. Ending assessment early.")
+                break
+                
+            logger.debug(f"Verifying {len(points_to_check)} remaining point(s) against chunk {i+1}/{len(transcript_chunks)}...")
+            
+            # [NEW] Sub-batching logic to prevent context overflow
+            current_sub_batch = []
+            for point in points_to_check:
+                current_sub_batch.append(point)
+                # Check if the current sub-batch is getting too large
+                batch_json = json.dumps(current_sub_batch, ensure_ascii=False)
+                if self._estimate_token_count(batch_json) > max_tokens_for_points:
+                    # The batch is full (excluding the latest point). Send it.
+                    points_to_send = current_sub_batch[:-1]
+                    verifications_in_sub_batch = self._verify_points_against_chunk(points_to_send, chunk)
+                    if verifications_in_sub_batch:
+                        newly_verified = {item['point'] for item in verifications_in_sub_batch if 'point' in item}
+                        globally_verified_points.update(newly_verified)
+                    # The new batch starts with the point that didn't fit.
+                    current_sub_batch = [point]
+
+            # Send the final sub-batch which was not full
+            if current_sub_batch:
+                verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
+                if verifications_in_sub_batch:
+                    newly_verified = {item['point'] for item in verifications_in_sub_batch if 'point' in item}
+                    globally_verified_points.update(newly_verified)
+
+        all_points_set = set(all_bullet_points)
+        failed_points = list(all_points_set - globally_verified_points)
+        
+        if failed_points:
+             for point in failed_points:
+                logger.warning(f"Point FAILED verification across all chunks: '{point}'")
+
+        score = len(globally_verified_points) / len(all_bullet_points) if all_bullet_points else 0.0
+        logger.info(f"Factual correctness score: {score:.2f} ({len(globally_verified_points)}/{len(all_bullet_points)} points verified)")
+        
+        return {"score": score, "verified_points": list(globally_verified_points), "failed_points": failed_points}
+
+    # --- All other methods are unchanged ---
     def revise_summary(self, summary, problem_string):
+        # ... (Implementation unchanged)
         prompt = PROMPT_REVISE_SUMMARY.format(summary=summary, problems=problem_string)
-        result = self._call_ollama(
-            prompt,
-            num_ctx=self.num_ctx["revise"],
-            temperature=self.llm_params["revise_temp"],
-            timeout=self.timeouts["revise"]
-        )
+        result = self._call_ollama(prompt, num_ctx=self.num_ctx["revise"], temperature=self.llm_params["revise_temp"], timeout=self.timeouts["revise"])
         revised = result.get('response', '').strip()
         if not revised:
             logger.warning("Revision attempt produced an empty summary. Returning original.")
             return summary
         logger.debug("Full revised summary:\n%s", revised)
         return revised
-
     def _assess_qualitative_issues(self, summary):
+        # ... (Implementation unchanged)
         logger.info("Assessing qualitative issues (logic, clarity, language)...")
         problems = []
         prompt = PROMPT_ASSESS_QUALITY.format(summary=summary)
         response_text = ""
         try:
-            result = self._call_ollama(
-                prompt,
-                num_ctx=self.num_ctx["quality_assess"],
-                temperature=self.llm_params["quality_assess_temp"],
-                timeout=self.timeouts["quality_assess"]
-            )
+            result = self._call_ollama(prompt, num_ctx=self.num_ctx["quality_assess"], temperature=self.llm_params["quality_assess_temp"], timeout=self.timeouts["quality_assess"])
             response_text = result.get('response', '{}').strip()
             response_json = json.loads(response_text)
-            
             rule_analysis = response_json.get("regelanalys", [])
             for item in rule_analysis:
                 if item.get("status") == "BRUTEN":
@@ -274,13 +314,12 @@ class CritiqueSummarizer:
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON from quality assessment response. Full response text: '{response_text}'", exc_info=True)
             return []
-
     def perform_critique(self, summary, transcript=None):
+        # ... (Implementation unchanged)
         logger.info("--- Starting new 3-phase critique and revision cycle ---")
         current_summary = summary
         final_problems = []
         last_factual_assessment = None
-        
         for i in range(self.max_revisions + 1):
             logger.info(f"--- Iteration {i+1}/{self.max_revisions + 1} ---")
             found_problems = []
@@ -308,14 +347,11 @@ class CritiqueSummarizer:
                                 logger.info("Phase 3 passed: Quality assessment is OK.")
                     else:
                         logger.info("No transcript provided, skipping factual and qualitative checks.")
-                
                 if not found_problems:
                     logger.info("Summary passed all 3 phases. Revision cycle complete.")
                     return current_summary, [], last_factual_assessment
-
                 final_problems = found_problems
                 logger.warning(f"Current summary failed checks. Problems found:\n- " + "\n- ".join(final_problems))
-
                 if i < self.max_revisions:
                     logger.info(f"Attempting revision {i+1}...")
                     problem_string = "\n".join(f"- {p}" for p in final_problems)
@@ -326,15 +362,14 @@ class CritiqueSummarizer:
             except requests.RequestException:
                 logger.error("Aborting critique cycle due to unrecoverable API error.")
                 return current_summary, final_problems, last_factual_assessment
-
         return current_summary, final_problems, last_factual_assessment
-
     def _extract_bullet_points(self, summary):
+        # ... (Implementation unchanged)
         if not summary: return []
         lines = summary.split('\n')
         return [line.strip()[1:].strip() for line in lines if line.strip().startswith('-')]
-
     def _chunk_transcript(self, text):
+        # ... (Implementation unchanged)
         if len(text) <= self.chunk_size: return [text]
         chunks = []
         start = 0
@@ -343,58 +378,11 @@ class CritiqueSummarizer:
             chunks.append(text[start:end])
             start += self.chunk_size - self.chunk_overlap
         return chunks
-
-    def _recursive_factual_assessment(self, summary, transcript):
-        """
-        [REVISED] Uses an efficient batch-verification approach to minimize API calls.
-        """
-        logger.info("Starting recursive factual correctness assessment (batch citation mode)...")
-        all_bullet_points = self._extract_bullet_points(summary)
-        if not all_bullet_points:
-            return {"score": 1.0, "verified_points": [], "failed_points": []}
-
-        transcript_chunks = self._chunk_transcript(transcript)
-        logger.info(f"Divided transcript into {len(transcript_chunks)} overlapping chunks.")
-        
-        globally_verified_points = set()
-
-        for i, chunk in enumerate(transcript_chunks):
-            points_to_check = [p for p in all_bullet_points if p not in globally_verified_points]
-            if not points_to_check:
-                logger.info("All points have been verified. Ending assessment early.")
-                break
-                
-            logger.debug(f"Verifying {len(points_to_check)} remaining point(s) against chunk {i+1}/{len(transcript_chunks)}...")
-            verifications_in_chunk = self._verify_points_against_chunk(points_to_check, chunk)
-            
-            if verifications_in_chunk:
-                newly_verified_points = {item['point'] for item in verifications_in_chunk if 'point' in item}
-                logger.debug(f"Chunk {i+1} verified {len(newly_verified_points)} new point(s).")
-                globally_verified_points.update(newly_verified_points)
-
-        all_points_set = set(all_bullet_points)
-        failed_points = list(all_points_set - globally_verified_points)
-        
-        if failed_points:
-             for point in failed_points:
-                logger.warning(f"Point FAILED verification across all chunks: '{point}'")
-
-        score = len(globally_verified_points) / len(all_bullet_points) if all_bullet_points else 0.0
-        logger.info(f"Factual correctness score: {score:.2f} ({len(globally_verified_points)}/{len(all_bullet_points)} points verified)")
-        
-        return {
-            "score": score,
-            "verified_points": list(globally_verified_points),
-            "failed_points": failed_points
-        }
-
     def _assess_structural_integrity(self, summary):
-        """Uses a robust stop-word heuristic for the language check."""
+        # ... (Implementation unchanged)
         problems = []
         rules_passed = 0
         total_rules = 3
-        
-        # Rule 1: Language Heuristic Check
         bullet_points_text = " ".join(self._extract_bullet_points(summary))
         if bullet_points_text:
             words_in_summary = set(re.findall(r'\b[a-zA-ZåäöÅÄÖ]+\b', bullet_points_text.lower()))
@@ -404,8 +392,6 @@ class CritiqueSummarizer:
                 rules_passed += 1
         else:
             rules_passed += 1
-
-        # Rule 2: Length Check
         bullet_points = self._extract_bullet_points(summary)
         try:
             range_str = self.RULES.get("length_range", "6-8")
@@ -417,21 +403,17 @@ class CritiqueSummarizer:
         except (ValueError, IndexError):
              logger.warning(f"Could not parse length_range rule: '{range_str}'")
              total_rules -= 1
-        
-        # Rule 3: Format Check
         non_empty_lines = [line for line in summary.split('\n') if line.strip()]
         if all(line.startswith('-') for line in non_empty_lines):
             rules_passed += 1
         else:
             problems.append("Strukturellt fel: Inte alla rader är korrekta punkter som börjar med '-'.")
-            
         score = rules_passed / total_rules if total_rules > 0 else 1.0
         return {"problems": problems, "score": score}
-
     def get_robust_confidence_score(self, summary, transcript=None, factual_assessment=None):
+        # ... (Implementation unchanged)
         if not summary or not summary.strip():
             return {"final_confidence": 0.0, "component_scores": {}, "failed_points": []}
-        
         fact_score, failed_points = 0.0, []
         if transcript:
             if factual_assessment:
@@ -441,12 +423,9 @@ class CritiqueSummarizer:
                 logger.warning("No pre-computed factual assessment provided; running it now.")
                 assessment = self._recursive_factual_assessment(summary, transcript)
             fact_score, failed_points = assessment["score"], assessment["failed_points"]
-        
         struct_report = self._assess_structural_integrity(summary)
         struct_score_val = struct_report["score"]
-        
         ling_score = self._assess_linguistic_quality(summary)
-        
         weights = {"factual": 0.60, "structural": 0.25, "linguistic": 0.15}
         final_score = (fact_score * weights["factual"]) + (struct_score_val * weights["structural"]) + (ling_score * weights["linguistic"])
         if not transcript:
@@ -459,16 +438,11 @@ class CritiqueSummarizer:
                 "structural_integrity": round(struct_score_val, 3),
                 "linguistic_quality": round(ling_score, 3)
             }, "failed_points": failed_points }
-            
     def _assess_linguistic_quality(self, summary):
+        # ... (Implementation unchanged)
         response_text = ""
         try:
-            result = self._call_ollama(
-                prompt=PROMPT_BETYGSÄTT_SPRÅK.format(summary=summary),
-                num_ctx=self.num_ctx["quality_score"],
-                temperature=self.llm_params["quality_score_temp"],
-                timeout=self.timeouts["quality_score"]
-            )
+            result = self._call_ollama(prompt=PROMPT_BETYGSÄTT_SPRÅK.format(summary=summary), num_ctx=self.num_ctx["quality_score"], temperature=self.llm_params["quality_score_temp"], timeout=self.timeouts["quality_score"])
             response_text = result.get('response', '{}').strip()
             response_json = json.loads(response_text)
             score = response_json.get("score", 3)
