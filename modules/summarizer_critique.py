@@ -196,10 +196,10 @@ class CritiqueSummarizer:
             result = self._call_ollama(prompt, num_ctx=self.num_ctx["verify"], temperature=self.llm_params["verify_temp"], timeout=self.timeouts["verify"])
             response_text = result.get('response', '{}').strip()
 
-            # --- [NEW LOGGING 4] ---
+            # --- [NEW LOGGING 4 - Corrected to INFO] ---
             # Log the raw response from the API before any parsing. This is the most critical log.
-            logger.debug(f"RAW OLLAMA VERIFICATION RESPONSE (UTF-8 bytes): {response_text.encode('utf-8', 'replace')}")
-            # -------------------------
+            logger.info(f"ASSESSMENT - RAW OLLAMA RESPONSE (UTF-8 bytes): {response_text.encode('utf-8', 'replace')}")
+            # --------------------------------------------
 
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
@@ -215,7 +215,7 @@ class CritiqueSummarizer:
         except requests.RequestException:
             logger.error("Batch verification failed after all retries.")
             return []
-        except json.JSONDecodeError:
+        except json.JSONDecodeEror:
             logger.error(f"Failed to parse JSON from batch verification response. Full response text: '{response_text}'", exc_info=True)
             return []
     
@@ -225,19 +225,20 @@ class CritiqueSummarizer:
 
     def _recursive_factual_assessment(self, summary, transcript):
         """
-        [MODIFIED WITH DEBUG LOGGING]
+        [MODIFIED WITH INFO-LEVEL DEBUG LOGGING]
         Includes logging to track the state of strings through the verification process.
+        All new logging is at the INFO level to ensure visibility.
         """
         logger.info("Starting recursive factual correctness assessment (batch citation mode)...")
         all_bullet_points = self._extract_bullet_points(summary)
         if not all_bullet_points:
             return {"score": 1.0, "verified_points": [], "failed_points": []}
         
-        # --- [NEW LOGGING 1] ---
+        # --- [NEW LOGGING 1 - Corrected to INFO] ---
         # Log the initial state of each bullet point to check for the problematic character.
         for point in all_bullet_points:
-            logger.debug(f"RAW BULLET POINT (UTF-8 bytes): {point.encode('utf-8', 'replace')}")
-        # -------------------------
+            logger.info(f"ASSESSMENT - RAW BULLET POINT (UTF-8 bytes): {point.encode('utf-8', 'replace')}")
+        # --------------------------------------------
 
         transcript_chunks = self._chunk_transcript(transcript)
         logger.info(f"Divided transcript into {len(transcript_chunks)} overlapping chunks.")
@@ -257,7 +258,7 @@ class CritiqueSummarizer:
                 logger.info("All points have been verified. Ending assessment early.")
                 break
                 
-            logger.debug(f"Verifying {len(points_to_check)} remaining point(s) against chunk {i+1}/{len(transcript_chunks)}...")
+            logger.info(f"Verifying {len(points_to_check)} remaining point(s) against chunk {i+1}/{len(transcript_chunks)}...")
             
             current_sub_batch = []
             for point in points_to_check:
@@ -269,9 +270,9 @@ class CritiqueSummarizer:
                 potential_batch = current_sub_batch + [point]
                 batch_json = json.dumps(potential_batch, ensure_ascii=False)
                 if self._estimate_token_count(batch_json) > max_tokens_for_points:
-                    # --- [NEW LOGGING 2] ---
-                    logger.debug(f"JSON BATCH SENT TO OLLAMA (UTF-8 bytes): {json.dumps(current_sub_batch, ensure_ascii=False).encode('utf-8', 'replace')}")
-                    # -------------------------
+                    # --- [NEW LOGGING 2 - Corrected to INFO] ---
+                    logger.info(f"ASSESSMENT - JSON BATCH SENT (UTF-8 bytes): {json.dumps(current_sub_batch, ensure_ascii=False).encode('utf-8', 'replace')}")
+                    # --------------------------------------------
                     verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
                     if verifications_in_sub_batch:
                         newly_verified = {item['point'] for item in verifications_in_sub_batch}
@@ -281,9 +282,9 @@ class CritiqueSummarizer:
                     current_sub_batch = potential_batch
 
             if current_sub_batch:
-                # --- [NEW LOGGING 3] ---
-                logger.debug(f"FINAL JSON BATCH SENT TO OLLAMA (UTF-8 bytes): {json.dumps(current_sub_batch, ensure_ascii=False).encode('utf-8', 'replace')}")
-                # -------------------------
+                # --- [NEW LOGGING 3 - Corrected to INFO] ---
+                logger.info(f"ASSESSMENT - FINAL JSON BATCH SENT (UTF-8 bytes): {json.dumps(current_sub_batch, ensure_ascii=False).encode('utf-8', 'replace')}")
+                # --------------------------------------------
                 verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
                 if verifications_in_sub_batch:
                     newly_verified = {item['point'] for item in verifications_in_sub_batch}
