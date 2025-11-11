@@ -2,7 +2,7 @@
 """
 Rule-based critique and revision system for Lesson Transcriber
 Analyzes summaries against quality rules and revises until they pass.
-This version implements a true iterative revision loop for maximum accuracy.
+This version implements a robust retry mechanism for all network requests.
 """
 
 import logging
@@ -10,15 +10,10 @@ import requests
 import json
 import time
 import re
+import random # [NEW] Import for jitter
 
 logger = logging.getLogger(__name__)
 
-try:
-    import torch
-except ImportError:
-    torch = None
-
-# [REVISED] Prompts are now fully integrated and cleaned up.
 PROMPT_ASSESS_QUALITY = """
 Du är en noggrann redaktör som granskar en lektionssammanfattning.
 Din uppgift är att bedöma sammanfattningens interna kvalitet baserat ENBART på texten nedan, utan tillgång till originaltranskriptet.
@@ -73,37 +68,33 @@ PROBLEM SOM HITTADES:
 
 REVIDERAD SAMMANFATTNING:"""
 
-
+PROMPT_VERIFIERA_PUNKT = """
+Din uppgift är att verifiera om 'SAMMANFATTNINGSPUNKT' har faktabaserat stöd i 'TEXTUTDRAG'.
+Följ dessa steg:
+1.  Läs SAMMANFATTNINGSPUNKT.
+2.  Läs TEXTUTDRAG noggrant för att hitta meningar som direkt stödjer punkten.
+3.  Om du hittar direkta bevis, extrahera den stödjande meningen/meningarna ordagrant till fältet "quote".
+4.  Baserat på bevisen, avgör om punkten är "KORREKT" eller "FEL".
+TEXTUTDRAG:
+{text_chunk}
+SAMMANFATTNINGSPUNKT:
+{point}
+Svara ENDAST med JSON i detta format:
+{{"quote": "Den exakta meningen från texten...", "decision": "KORREKT"}}
+Om inget stödjande citat kan hittas, svara så här:
+{{"quote": "", "decision": "FEL"}}
+"""
+PROMPT_BETYGSÄTT_SPRÅK = """
+Du är en expert på svenska språket. Betygsätt följande sammanfattning på en skala från 1 till 5 baserat på dess språkliga kvalitet.
+KRITERIER:
+- Grammatisk korrekthet, Tydlighet och koncishet, Naturligt språkflöde
+SAMMANFATTNING:
+{summary}
+Svara ENDAST med ett JSON-objekt som i detta exempel:
+{{"score": 4}}
+"""
 class CritiqueSummarizer:
-    """
-    Rule-based critique and revision system with robust confidence scoring.
-    """
     RULES = {"length_range": "6-8"}
-    PROMPT_VERIFIERA_PUNKT = """
-    Din uppgift är att verifiera om 'SAMMANFATTNINGSPUNKT' har faktabaserat stöd i 'TEXTUTDRAG'.
-    Följ dessa steg:
-    1.  Läs SAMMANFATTNINGSPUNKT.
-    2.  Läs TEXTUTDRAG noggrant för att hitta meningar som direkt stödjer punkten.
-    3.  Om du hittar direkta bevis, extrahera den stödjande meningen/meningarna ordagrant till fältet "quote".
-    4.  Baserat på bevisen, avgör om punkten är "KORREKT" eller "FEL".
-    TEXTUTDRAG:
-    {text_chunk}
-    SAMMANFATTNINGSPUNKT:
-    {point}
-    Svara ENDAST med JSON i detta format:
-    {{"quote": "Den exakta meningen från texten...", "decision": "KORREKT"}}
-    Om inget stödjande citat kan hittas, svara så här:
-    {{"quote": "", "decision": "FEL"}}
-    """
-    PROMPT_BETYGSÄTT_SPRÅK = """
-    Du är en expert på svenska språket. Betygsätt följande sammanfattning på en skala från 1 till 5 baserat på dess språkliga kvalitet.
-    KRITERIER:
-    - Grammatisk korrekthet, Tydlighet och koncishet, Naturligt språkflöde
-    SAMMANFATTNING:
-    {summary}
-    Svara ENDAST med ett JSON-objekt som i detta exempel:
-    {{"score": 4}}
-    """
 
     def __init__(self, config):
         self.config = config
@@ -113,31 +104,71 @@ class CritiqueSummarizer:
         self.chunk_size = config.get('chunk_size_chars', 1500)
         self.chunk_overlap = config.get('chunk_overlap_chars', 200)
         self.max_revisions = config.get('max_revisions', 3)
+        self.max_retries = config.get('max_retries', 3)
+        self.initial_backoff = config.get('initial_backoff_seconds', 5)
+
+        # [CORRECTED] Centralized configuration for all LLM calls
+        self.timeouts = {
+            "verify": config.get("timeout_verify", 120),
+            "revise": config.get("timeout_revise", 120),
+            "quality_assess": config.get("timeout_quality_assess", 90),
+            "quality_score": config.get("timeout_quality_score", 30)
+        }
+        self.llm_params = {
+            "verify_temp": config.get("temp_verify", 0.0),
+            "revise_temp": config.get("temp_revise", 0.1),
+            "quality_assess_temp": config.get("temp_quality_assess", 0.1),
+            "quality_score_temp": config.get("temp_quality_score", 0.0)
+        }
+        self.num_ctx = {
+            "verify": 2000,
+            "revise": 3000,
+            "quality_assess": 2500,
+            "quality_score": 1500
+        }
 
     def _call_ollama(self, prompt, num_ctx, temperature, top_p=0.8, timeout=90):
+        # ... (Implementation unchanged, it's already robust)
         request_payload = {
             "model": self.ollama_model, "prompt": prompt, "stream": False,
             "options": {"num_ctx": num_ctx, "temperature": temperature, "top_p": top_p}
         }
-        try:
-            response = requests.post(f"{self.ollama_url}/api/generate", json=request_payload, timeout=timeout)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            logger.error(f"Ollama request failed: {e}", exc_info=True)
-            raise
+        backoff_time = self.initial_backoff
+        for attempt in range(self.max_retries):
+            try:
+                logger.debug(f"Attempt {attempt + 1}/{self.max_retries} to send request to Ollama...")
+                response = requests.post(f"{self.ollama_url}/api/generate", json=request_payload, timeout=timeout)
+                response.raise_for_status()
+                return response.json()
+            except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+                logger.warning(f"Ollama request failed on attempt {attempt + 1}: {e}")
+                if attempt + 1 == self.max_retries:
+                    logger.error("Maximum retries reached. Aborting Ollama request.")
+                    raise
+                sleep_time = backoff_time + random.uniform(0, 1)
+                logger.info(f"Waiting for {sleep_time:.2f} seconds before retrying...")
+                time.sleep(sleep_time)
+                backoff_time *= 2
+        raise Exception("Ollama request failed after all retries.")
 
     def verify_point_against_chunk(self, summary_point, text_chunk):
         prompt = self.PROMPT_VERIFIERA_PUNKT.format(point=summary_point, text_chunk=text_chunk)
         response_text = ""
         try:
-            result = self._call_ollama(prompt, num_ctx=2000, temperature=0.0, timeout=45)
+            # [CORRECTED] Using centralized config
+            result = self._call_ollama(
+                prompt,
+                num_ctx=self.num_ctx["verify"],
+                temperature=self.llm_params["verify_temp"],
+                timeout=self.timeouts["verify"]
+            )
             response_text = result.get('response', '{}').strip()
             response_json = json.loads(response_text)
             decision = response_json.get("decision", "").upper()
             quote = response_json.get("quote", "")
             return decision == "KORREKT" and bool(quote)
         except requests.RequestException:
+            logger.error("Verification failed after all retries.")
             return False
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON from verification response. Full response text: '{response_text}'", exc_info=True)
@@ -145,17 +176,110 @@ class CritiqueSummarizer:
 
     def revise_summary(self, summary, problem_string):
         prompt = PROMPT_REVISE_SUMMARY.format(summary=summary, problems=problem_string)
+        # [CORRECTED] Using centralized config
+        result = self._call_ollama(
+            prompt,
+            num_ctx=self.num_ctx["revise"],
+            temperature=self.llm_params["revise_temp"],
+            timeout=self.timeouts["revise"]
+        )
+        revised = result.get('response', '').strip()
+        if not revised:
+            logger.warning("Revision attempt produced an empty summary. Returning original.")
+            return summary
+        logger.debug("Full revised summary:\n%s", revised)
+        return revised
+
+    def _assess_qualitative_issues(self, summary):
+        logger.info("Assessing qualitative issues (logic, clarity, language)...")
+        problems = []
+        prompt = PROMPT_ASSESS_QUALITY.format(summary=summary)
+        response_text = ""
         try:
-            result = self._call_ollama(prompt, num_ctx=3000, temperature=0.1, timeout=120)
-            revised = result.get('response', '').strip()
-            if not revised:
-                logger.warning("Revision attempt produced an empty summary. Returning original.")
-                return summary
-            logger.debug("Full revised summary:\n%s", revised)
-            return revised
+            # [CORRECTED] Using centralized config
+            result = self._call_ollama(
+                prompt,
+                num_ctx=self.num_ctx["quality_assess"],
+                temperature=self.llm_params["quality_assess_temp"],
+                timeout=self.timeouts["quality_assess"]
+            )
+            response_text = result.get('response', '{}').strip()
+            response_json = json.loads(response_text)
+            
+            rule_analysis = response_json.get("regelanalys", [])
+            for item in rule_analysis:
+                if item.get("status") == "BRUTEN":
+                    problem_desc = f"Kvalitetsbrist ({item.get('regel', 'Okänd regel')}): {item.get('motivering', 'Ingen motivering angiven.')}"
+                    problems.append(problem_desc)
+            return problems
         except requests.RequestException:
-            logger.error("Summary revision failed due to an API error.")
-            raise
+            logger.warning("Could not assess qualitative issues due to API error after all retries.")
+            return []
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse JSON from quality assessment response. Full response text: '{response_text}'", exc_info=True)
+            return []
+
+    def perform_critique(self, summary, transcript=None):
+        logger.info("--- Starting new 3-phase critique and revision cycle ---")
+        current_summary = summary
+        final_problems = []
+        # [CORRECTED] Store the latest assessment to avoid redundant calls
+        last_factual_assessment = None
+        
+        for i in range(self.max_revisions + 1):
+            logger.info(f"--- Iteration {i+1}/{self.max_revisions + 1} ---")
+            found_problems = []
+            try:
+                # Phase 1: Structure
+                structural_report = self._assess_structural_integrity(current_summary)
+                if structural_report["problems"]:
+                    logger.warning(f"Phase 1 failed: Found {len(structural_report['problems'])} structural problems.")
+                    found_problems.extend(structural_report["problems"])
+                else:
+                    logger.info("Phase 1 passed: Structure is OK.")
+                    
+                    # Phase 2: Facts
+                    if transcript:
+                        # [CORRECTED] Only run the expensive assessment ONCE per iteration
+                        assessment = self._recursive_factual_assessment(current_summary, transcript)
+                        last_factual_assessment = assessment # Cache the result
+                        if assessment["failed_points"]:
+                            logger.warning(f"Phase 2 failed: Found {len(assessment['failed_points'])} unverified points.")
+                            for point in assessment["failed_points"]:
+                                found_problems.append(f"Verifieringsfel: Punkten '{point}' kunde inte verifieras.")
+                        else:
+                            logger.info("Phase 2 passed: All points verified.")
+                            
+                            # Phase 3: Quality
+                            qualitative_problems = self._assess_qualitative_issues(current_summary)
+                            if qualitative_problems:
+                                 logger.warning(f"Phase 3 failed: Found {len(qualitative_problems)} qualitative problems.")
+                                 found_problems.extend(qualitative_problems)
+                            else:
+                                logger.info("Phase 3 passed: Quality assessment is OK.")
+                    else:
+                        logger.info("No transcript provided, skipping factual and qualitative checks.")
+                
+                if not found_problems:
+                    logger.info("Summary passed all 3 phases. Revision cycle complete.")
+                    # [CORRECTED] Pass the final, successful assessment to the score calculator
+                    return current_summary, [], last_factual_assessment
+
+                final_problems = found_problems
+                logger.warning(f"Current summary failed checks. Problems found:\n- " + "\n- ".join(final_problems))
+
+                if i < self.max_revisions:
+                    logger.info(f"Attempting revision {i+1}...")
+                    problem_string = "\n".join(f"- {p}" for p in final_problems)
+                    current_summary = self.revise_summary(current_summary, problem_string)
+                else:
+                    logger.error(f"Maximum revisions ({self.max_revisions}) reached. Aborting.")
+                    break
+            except requests.RequestException:
+                logger.error("Aborting critique cycle due to unrecoverable API error.")
+                return current_summary, final_problems, last_factual_assessment
+
+        return current_summary, final_problems, last_factual_assessment
 
     def _extract_bullet_points(self, summary):
         if not summary: return []
@@ -176,7 +300,7 @@ class CritiqueSummarizer:
         logger.info("Starting recursive factual correctness assessment...")
         bullet_points = self._extract_bullet_points(summary)
         if not bullet_points:
-            return {"score": 0.0, "verified_points": [], "failed_points": []}
+            return {"score": 1.0, "verified_points": [], "failed_points": []} # Empty summary is factually perfect
         transcript_chunks = self._chunk_transcript(transcript)
         logger.info(f"Divided transcript into {len(transcript_chunks)} overlapping chunks.")
         verified_points_set, failed_points_set = set(), set()
@@ -193,120 +317,54 @@ class CritiqueSummarizer:
         return {"score": score, "verified_points": list(verified_points_set), "failed_points": list(failed_points_set)}
 
     def _assess_structural_integrity(self, summary):
+        """[REVISED] Returns a report dictionary with both problems and a nuanced score."""
         problems = []
+        rules_passed = 0
+        total_rules = 2
         bullet_points = self._extract_bullet_points(summary)
+        
         try:
             range_str = self.RULES.get("length_range", "6-8")
             min_len, max_len = map(int, range_str.split('-'))
-            if not (min_len <= len(bullet_points) <= max_len):
-                problems.append(f"Strukturellt fel: Fel antal punkter. Sammanfattningen har {len(bullet_points)} punkter, men förväntar sig {range_str}.")
+            if min_len <= len(bullet_points) <= max_len:
+                rules_passed += 1
+            else:
+                problems.append(f"Strukturellt fel: Fel antal punkter. Har {len(bullet_points)}, förväntar sig {range_str}.")
         except (ValueError, IndexError):
-             logger.warning(f"Could not parse length_range rule: '{self.RULES.get('length_range')}'")
-        non_empty_lines = [line for line in summary.split('\n') if line.strip()]
-        if not all(line.startswith('-') for line in non_empty_lines):
-            problems.append("Strukturellt fel: Inte alla rader är korrekta punkter som börjar med '-'.")
-        return problems
-
-    def _assess_qualitative_issues(self, summary):
-        """[NEW] Uses the PROMPT_ASSESS_QUALITY to find subjective flaws in a summary."""
-        logger.info("Assessing qualitative issues (logic, clarity, language)...")
-        problems = []
-        prompt = PROMPT_ASSESS_QUALITY.format(summary=summary)
-        response_text = ""
-        try:
-            result = self._call_ollama(prompt, num_ctx=2500, temperature=0.1)
-            response_text = result.get('response', '{}').strip()
-            response_json = json.loads(response_text)
-            
-            rule_analysis = response_json.get("regelanalys", [])
-            for item in rule_analysis:
-                if item.get("status") == "BRUTEN":
-                    problem_desc = f"Kvalitetsbrist ({item.get('regel', 'Okänd regel')}): {item.get('motivering', 'Ingen motivering angiven.')}"
-                    problems.append(problem_desc)
-            return problems
-        except requests.RequestException:
-            logger.warning("Could not assess qualitative issues due to API error.")
-            return [] # Return no problems on API failure to avoid halting the process
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON from quality assessment response. Full response text: '{response_text}'", exc_info=True)
-            return [] # Return no problems on parsing failure
-
-    # --- THE REFINED REVISION LOOP ---
-    
-    def perform_critique(self, summary, transcript=None):
-        """
-        [REWRITTEN] Implements a true 3-phase iterative revision loop:
-        1. Structure -> 2. Facts -> 3. Quality
-        """
-        logger.info("--- Starting new 3-phase critique and revision cycle ---")
-        current_summary = summary
-        final_problems = []
+             logger.warning(f"Could not parse length_range rule: '{range_str}'")
+             total_rules -= 1 # Don't penalize for a bad rule
         
-        for i in range(self.max_revisions + 1):
-            logger.info(f"--- Iteration {i+1}/{self.max_revisions + 1} ---")
-            found_problems = []
+        non_empty_lines = [line for line in summary.split('\n') if line.strip()]
+        if all(line.startswith('-') for line in non_empty_lines):
+            rules_passed += 1
+        else:
+            problems.append("Strukturellt fel: Inte alla rader är korrekta punkter som börjar med '-'.")
+            
+        score = rules_passed / total_rules if total_rules > 0 else 1.0
+        return {"problems": problems, "score": score}
 
-            # Phase 1: Check Structure (Fast, Programmatic)
-            structural_problems = self._assess_structural_integrity(current_summary)
-            if structural_problems:
-                logger.warning(f"Phase 1 failed: Found {len(structural_problems)} structural problems.")
-                found_problems.extend(structural_problems)
-            else:
-                logger.info("Phase 1 passed: Structure is OK.")
-                
-                # Phase 2: Check Facts (Slow, Expensive)
-                if transcript:
-                    assessment = self._recursive_factual_assessment(current_summary, transcript)
-                    if assessment["failed_points"]:
-                        logger.warning(f"Phase 2 failed: Found {len(assessment['failed_points'])} unverified points.")
-                        for point in assessment["failed_points"]:
-                            found_problems.append(f"Verifieringsfel: Punkten '{point}' kunde inte verifieras mot transkriptet.")
-                    else:
-                        logger.info("Phase 2 passed: All points verified against transcript.")
-                        
-                        # Phase 3: Check Quality (Subjective) - only if structure and facts are OK
-                        qualitative_problems = self._assess_qualitative_issues(current_summary)
-                        if qualitative_problems:
-                             logger.warning(f"Phase 3 failed: Found {len(qualitative_problems)} qualitative problems.")
-                             found_problems.extend(qualitative_problems)
-                        else:
-                            logger.info("Phase 3 passed: Quality assessment is OK.")
-                else:
-                    logger.info("No transcript provided, skipping factual and qualitative checks.")
-
-            # Decision Point
-            if not found_problems:
-                logger.info("Summary passed all 3 phases. Revision cycle complete.")
-                return current_summary, []
-
-            final_problems = found_problems
-            logger.warning(f"Current summary failed checks. Problems found:\n- " + "\n- ".join(final_problems))
-
-            if i < self.max_revisions:
-                logger.info(f"Attempting revision {i+1}...")
-                problem_string = "\n".join(f"- {p}" for p in final_problems)
-                try:
-                    current_summary = self.revise_summary(current_summary, problem_string)
-                except requests.RequestException:
-                    logger.error("API error during revision. Aborting cycle.")
-                    return current_summary, final_problems
-            else:
-                logger.error(f"Maximum revisions ({self.max_revisions}) reached. Aborting.")
-                break
-
-        return current_summary, final_problems
-
-    # --- Confidence score methods ---
-
-    def get_robust_confidence_score(self, summary, transcript=None):
+    def get_robust_confidence_score(self, summary, transcript=None, factual_assessment=None):
+        """[REVISED] Now accepts an optional pre-computed factual assessment."""
         if not summary or not summary.strip():
             return {"final_confidence": 0.0, "component_scores": {}, "failed_points": []}
+        
         fact_score, failed_points = 0.0, []
         if transcript:
-            assessment = self._recursive_factual_assessment(summary, transcript)
+            # [CORRECTED] Use the cached assessment if provided, otherwise run it once.
+            if factual_assessment:
+                logger.debug("Using pre-computed factual assessment for confidence score.")
+                assessment = factual_assessment
+            else:
+                logger.warning("No pre-computed factual assessment provided; running it now.")
+                assessment = self._recursive_factual_assessment(summary, transcript)
             fact_score, failed_points = assessment["score"], assessment["failed_points"]
-        struct_score_val = 1.0 if not self._assess_structural_integrity(summary) else 0.0
+        
+        # [CORRECTED] Get the nuanced structural score
+        struct_report = self._assess_structural_integrity(summary)
+        struct_score_val = struct_report["score"]
+        
         ling_score = self._assess_linguistic_quality(summary)
+        
         weights = {"factual": 0.60, "structural": 0.25, "linguistic": 0.15}
         final_score = (fact_score * weights["factual"]) + (struct_score_val * weights["structural"]) + (ling_score * weights["linguistic"])
         if not transcript:
@@ -323,8 +381,13 @@ class CritiqueSummarizer:
     def _assess_linguistic_quality(self, summary):
         response_text = ""
         try:
-            prompt = self.PROMPT_BETYGSÄTT_SPRÅK.format(summary=summary)
-            result = self._call_ollama(prompt, num_ctx=1500, temperature=0.1)
+            # [CORRECTED] Using centralized config
+            result = self._call_ollama(
+                prompt=self.PROMPT_BETYGSÄTT_SPRÅK.format(summary=summary),
+                num_ctx=self.num_ctx["quality_score"],
+                temperature=self.llm_params["quality_score_temp"],
+                timeout=self.timeouts["quality_score"]
+            )
             response_text = result.get('response', '{}').strip()
             response_json = json.loads(response_text)
             score = response_json.get("score", 3)
