@@ -32,12 +32,10 @@ class Summarizer:
         self.summarizer_config = SummarizerConfig(config)
         self.summarizer_json = SummarizerJSON(config)
         
-        # The CritiqueSummarizer is now a core component, not optional.
         self.critique_summarizer = CritiqueSummarizer(config)
         
         self.ollama_manager = OllamaServiceManager(config['ollama_url'], config['ollama_model'])
         
-        # [NEW] Define the confidence threshold for triggering a revision
         self.revision_threshold = config.get('revision_confidence_threshold', 0.85)
 
     def generate_summary(self, transcript):
@@ -80,43 +78,36 @@ class Summarizer:
         return final_summary
 
     def process_summary(self, raw_llm_output, avg_logprob, no_speech_prob, transcript):
-        """
-        [REVISED] Process raw LLM output using the "Trust, But Verify" workflow.
-        """
         logger.info("Parsing initial LLM output")
         parsed_data = self.summarizer_json.parse_llm_output(raw_llm_output)
         
-        # [CORRECTED] The "Swedish cleanup" block has been completely removed.
-        # It was redundant and the source of the character encoding bug.
         subject = parsed_data.get('subject', 'Okänt Ämne')
         initial_summary = parsed_data.get('summary', '')
 
         if not initial_summary:
             logger.error("Initial summary from LLM was empty after parsing.")
-            # Handle failure case
+        
             return {'subject': subject, 'summary': 'Error: Could not generate summary.', 'confidence': 0.0, 'whisper_metrics': {}}
 
         logger.info(f"Initial summary parsed. Subject: '{subject}', Length: {len(initial_summary)}")
 
-        # --- TRUST, BUT VERIFY ---
+        
         
         logger.info("--- Performing initial quality verification ---")
-        # Perform a single, lightweight verification pass to get a confidence score.
         initial_assessment = self.critique_summarizer.get_robust_confidence_score(initial_summary, transcript)
         confidence = initial_assessment["final_confidence"]
         
         final_summary = initial_summary
         problems_found = initial_assessment["failed_points"]
         
-        # Make an intelligent decision based on the initial quality check.
+        
         if confidence < self.revision_threshold:
             logger.warning(f"Initial summary failed quality check with score {confidence:.2f}. Starting revision cycle.")
             
-            # Only run the expensive critique loop if the initial check fails.
-            # Pass the pre-computed assessment to save time.
+            
             revised_summary, final_problems, final_assessment = self.critique_summarizer.perform_critique(initial_summary, transcript)
             
-            # Recalculate confidence on the final revised version
+            
             final_confidence_report = self.critique_summarizer.get_robust_confidence_score(revised_summary, transcript, factual_assessment=final_assessment)
             
             final_summary = revised_summary

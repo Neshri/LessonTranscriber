@@ -49,8 +49,7 @@ class SummarizerJSON:
     def parse_llm_output(self, llm_content: str) -> dict:
         """
         Parses the raw LLM output, extracting and validating the last valid JSON object.
-        Returns a dictionary with 'subject' and 'summary' keys.
-        Falls back to plain text if no valid JSON is found.
+        The erroneous call to codecs.decode has been removed.
         """
         if not isinstance(llm_content, str):
             logger.debug("LLM content is not a string, converting to dict")
@@ -106,9 +105,7 @@ class SummarizerJSON:
                 # Ensure required keys are present
                 if 'subject' in data and 'summary' in data:
                     subject = data.get('subject', self._generate_default_subject())
-                    summary = data.get('summary', 'Sammanfattning saknas.')
-                    # Decode escape sequences in summary field
-                    summary = codecs.decode(summary, 'unicode_escape')
+                    summary = data.get('summary', 'Sammanfattning saknas.')               
                     if not subject:
                         subject = self._generate_default_subject()
                     logger.info("Successfully parsed LLM output with required keys")

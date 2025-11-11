@@ -215,7 +215,7 @@ class CritiqueSummarizer:
         except requests.RequestException:
             logger.error("Batch verification failed after all retries.")
             return []
-        except json.JSONDecodeEror:
+        except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON from batch verification response. Full response text: '{response_text}'", exc_info=True)
             return []
     
