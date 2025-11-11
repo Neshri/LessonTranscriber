@@ -58,10 +58,8 @@ EXEMPEL PÅ SVARSFORMAT:
 DITT SVAR:
 """
 
-# [REVISED] The new, much stricter revision prompt.
-PROMPT_REVISE_SUMMARY = """Din uppgift är att revidera en sammanfattning för att åtgärda en lista med specifika problem.
-Läs 'ORIGINAL SAMMANFATTNING' och 'PROBLEM SOM HITTADES'.
-Skriv sedan en ny version av sammanfattningen som åtgärdar problemen.
+PROMPT_REVISE_SUMMARY = """Din uppgift är att agera som en redaktör och revidera 'ORIGINAL SAMMANFATTNING' för att åtgärda de specifika problem som listas under 'PROBLEM SOM HITTADES'.
+Behåll all korrekt teknisk information men förbättra sammanfattningen enligt den givna feedbacken.
 
 **VIKTIGA REGLER FÖR DITT SVAR:**
 -   Svara **ENDAST** med den reviderade sammanfattningens text.
@@ -76,22 +74,6 @@ PROBLEM SOM HITTADES:
 
 REVIDERAD SAMMANFATTNING:"""
 
-PROMPT_VERIFIERA_PUNKT = """
-Din uppgift är att verifiera om 'SAMMANFATTNINGSPUNKT' har faktabaserat stöd i 'TEXTUTDRAG'.
-Följ dessa steg:
-1.  Läs SAMMANFATTNINGSPUNKT.
-2.  Läs TEXTUTDRAG noggrant för att hitta meningar som direkt stödjer punkten.
-3.  Om du hittar direkta bevis, extrahera den stödjande meningen/meningarna ordagrant till fältet "quote".
-4.  Baserat på bevisen, avgör om punkten är "KORREKT" eller "FEL".
-TEXTUTDRAG:
-{text_chunk}
-SAMMANFATTNINGSPUNKT:
-{point}
-Svara ENDAST med JSON i detta format:
-{{"quote": "Den exakta meningen från texten...", "decision": "KORREKT"}}
-Om inget stödjande citat kan hittas, svara så här:
-{{"quote": "", "decision": "FEL"}}
-"""
 PROMPT_BETYGSÄTT_SPRÅK = """
 Du är en expert på svenska språket. Betygsätt följande sammanfattning på en skala från 1 till 5 baserat på dess språkliga kvalitet.
 KRITERIER:
@@ -100,6 +82,43 @@ SAMMANFATTNING:
 {summary}
 Svara ENDAST med ett JSON-objekt som i detta exempel:
 {{"score": 4}}
+"""
+
+PROMPT_BATCH_VERIFY_AND_CITE = """
+Din uppgift är att agera som en utredare och verifiera en lista med påståenden ('SAMMANFATTNINGSPUNKTER') mot ett 'TEXTUTDRAG'.
+
+Följ dessa steg:
+1.  Läs TEXTUTDRAG noggrant för att förstå dess innehåll.
+2.  För VARJE påstående i SAMMANFATTNINGSPUNKTER, sök efter en eller flera meningar i TEXTUTDRAG som direkt bevisar påståendet.
+3.  Skapa en JSON-lista med objekt, där varje objekt representerar ett påstående som du lyckades verifiera.
+4.  Varje objekt i listan måste innehålla två nycklar: "point" (det exakta påståendet) och "quote" (den exakta meningen från texten som bevisar det).
+
+**VIKTIGA REGLER FÖR DITT SVAR:**
+-   Svara **ENDAST** med ett JSON-objekt som innehåller en enda nyckel, "verifications".
+-   Inkludera **ENDAST** de punkter som du kunde hitta ett direkt citat för.
+-   Om inga punkter kan verifieras, svara med en tom lista.
+
+TEXTUTDRAG:
+{text_chunk}
+
+SAMMANFATTNINGSPUNKTER (JSON-lista):
+{points_json_list}
+
+EXEMPEL PÅ SVARSFORMAT:
+{{
+  "verifications": [
+    {{
+      "point": "Ett påstående som kunde verifieras.",
+      "quote": "Här är den exakta meningen från textutdraget som bevisar påståendet."
+    }},
+    {{
+      "point": "Ett annat påstående som också stämde.",
+      "quote": "Och här är beviset för det andra påståendet."
+    }}
+  ]
+}}
+
+DITT SVAR:
 """
 
 SWEDISH_STOP_WORDS = {
@@ -121,6 +140,7 @@ class CritiqueSummarizer:
         self.max_revisions = config.get('max_revisions', 3)
         self.max_retries = config.get('max_retries', 3)
         self.initial_backoff = config.get('initial_backoff_seconds', 5)
+
         self.timeouts = {
             "verify": config.get("timeout_verify", 120),
             "revise": config.get("timeout_revise", 120),
@@ -163,8 +183,20 @@ class CritiqueSummarizer:
                 backoff_time *= 2
         raise Exception("Ollama request failed after all retries.")
 
-    def verify_point_against_chunk(self, summary_point, text_chunk):
-        prompt = PROMPT_VERIFIERA_PUNKT.format(point=summary_point, text_chunk=text_chunk)
+    def _verify_points_against_chunk(self, points_to_check, text_chunk):
+        """
+        [REVISED] Verifies a batch of points against a single chunk, requiring a citation for each.
+        Returns a list of verification objects ({'point': str, 'quote': str}).
+        """
+        if not points_to_check:
+            return []
+
+        points_json_list = json.dumps(points_to_check, ensure_ascii=False, indent=2)
+        
+        prompt = PROMPT_BATCH_VERIFY_AND_CITE.format(
+            text_chunk=text_chunk,
+            points_json_list=points_json_list
+        )
         response_text = ""
         try:
             result = self._call_ollama(
@@ -174,16 +206,31 @@ class CritiqueSummarizer:
                 timeout=self.timeouts["verify"]
             )
             response_text = result.get('response', '{}').strip()
+            # Handle potential markdown code blocks
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3]
+            
             response_json = json.loads(response_text)
-            decision = response_json.get("decision", "").upper()
-            quote = response_json.get("quote", "")
-            return decision == "KORREKT" and bool(quote)
+            
+            verifications = response_json.get("verifications", [])
+            if not isinstance(verifications, list):
+                logger.warning(f"LLM returned a non-list for verifications: {verifications}")
+                return []
+                
+            valid_verifications = [
+                item for item in verifications 
+                if isinstance(item, dict) and 'point' in item and 'quote' in item
+            ]
+            
+            return valid_verifications
         except requests.RequestException:
-            logger.error("Verification failed after all retries.")
-            return False
+            logger.error("Batch verification failed after all retries.")
+            return []
         except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON from verification response. Full response text: '{response_text}'", exc_info=True)
-            return False
+            logger.error(f"Failed to parse JSON from batch verification response. Full response text: '{response_text}'", exc_info=True)
+            return []
 
     def revise_summary(self, summary, problem_string):
         prompt = PROMPT_REVISE_SUMMARY.format(summary=summary, problems=problem_string)
@@ -193,7 +240,6 @@ class CritiqueSummarizer:
             temperature=self.llm_params["revise_temp"],
             timeout=self.timeouts["revise"]
         )
-        # The new prompt should only return the raw summary text.
         revised = result.get('response', '').strip()
         if not revised:
             logger.warning("Revision attempt produced an empty summary. Returning original.")
@@ -299,24 +345,48 @@ class CritiqueSummarizer:
         return chunks
 
     def _recursive_factual_assessment(self, summary, transcript):
-        logger.info("Starting recursive factual correctness assessment...")
-        bullet_points = self._extract_bullet_points(summary)
-        if not bullet_points:
+        """
+        [REVISED] Uses an efficient batch-verification approach to minimize API calls.
+        """
+        logger.info("Starting recursive factual correctness assessment (batch citation mode)...")
+        all_bullet_points = self._extract_bullet_points(summary)
+        if not all_bullet_points:
             return {"score": 1.0, "verified_points": [], "failed_points": []}
+
         transcript_chunks = self._chunk_transcript(transcript)
         logger.info(f"Divided transcript into {len(transcript_chunks)} overlapping chunks.")
-        verified_points_set, failed_points_set = set(), set()
-        for i, point in enumerate(bullet_points):
-            logger.debug(f"Verifying point {i+1}/{len(bullet_points)}: '{point}'")
-            is_point_verified = any(self.verify_point_against_chunk(point, chunk) for chunk in transcript_chunks)
-            if is_point_verified:
-                verified_points_set.add(point)
-            else:
+        
+        globally_verified_points = set()
+
+        for i, chunk in enumerate(transcript_chunks):
+            points_to_check = [p for p in all_bullet_points if p not in globally_verified_points]
+            if not points_to_check:
+                logger.info("All points have been verified. Ending assessment early.")
+                break
+                
+            logger.debug(f"Verifying {len(points_to_check)} remaining point(s) against chunk {i+1}/{len(transcript_chunks)}...")
+            verifications_in_chunk = self._verify_points_against_chunk(points_to_check, chunk)
+            
+            if verifications_in_chunk:
+                newly_verified_points = {item['point'] for item in verifications_in_chunk if 'point' in item}
+                logger.debug(f"Chunk {i+1} verified {len(newly_verified_points)} new point(s).")
+                globally_verified_points.update(newly_verified_points)
+
+        all_points_set = set(all_bullet_points)
+        failed_points = list(all_points_set - globally_verified_points)
+        
+        if failed_points:
+             for point in failed_points:
                 logger.warning(f"Point FAILED verification across all chunks: '{point}'")
-                failed_points_set.add(point)
-        score = len(verified_points_set) / len(bullet_points) if bullet_points else 0.0
-        logger.info(f"Factual correctness score: {score:.2f} ({len(verified_points_set)}/{len(bullet_points)} points verified)")
-        return {"score": score, "verified_points": list(verified_points_set), "failed_points": list(failed_points_set)}
+
+        score = len(globally_verified_points) / len(all_bullet_points) if all_bullet_points else 0.0
+        logger.info(f"Factual correctness score: {score:.2f} ({len(globally_verified_points)}/{len(all_bullet_points)} points verified)")
+        
+        return {
+            "score": score,
+            "verified_points": list(globally_verified_points),
+            "failed_points": failed_points
+        }
 
     def _assess_structural_integrity(self, summary):
         """Uses a robust stop-word heuristic for the language check."""
