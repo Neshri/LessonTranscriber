@@ -340,7 +340,17 @@ class CritiqueSummarizer:
             logger.error(f"Failed to parse JSON from quality assessment response. Full response text: '{response_text}'", exc_info=True)
             return []
     def perform_critique(self, summary, transcript=None):
-        # ... (Implementation unchanged)
+        """
+        [MODIFIED WITH FINAL DIAGNOSTIC LOGGING]
+        Adds a log at the very beginning to inspect the summary string
+        at the entry point of the class, proving where the corruption occurs.
+        """
+        # --- [FINAL DIAGNOSTIC LOG] ---
+        # This log will show the state of the summary string the moment it is
+        # passed into this class from your main script.
+        logger.info(f"PERFORM_CRITIQUE - Received summary (UTF-8 bytes): {summary.encode('utf-8', 'replace')}")
+        # --------------------------------
+
         logger.info("--- Starting new 3-phase critique and revision cycle ---")
         current_summary = summary
         final_problems = []
@@ -372,11 +382,14 @@ class CritiqueSummarizer:
                                 logger.info("Phase 3 passed: Quality assessment is OK.")
                     else:
                         logger.info("No transcript provided, skipping factual and qualitative checks.")
+                
                 if not found_problems:
                     logger.info("Summary passed all 3 phases. Revision cycle complete.")
                     return current_summary, [], last_factual_assessment
+                
                 final_problems = found_problems
                 logger.warning(f"Current summary failed checks. Problems found:\n- " + "\n- ".join(final_problems))
+                
                 if i < self.max_revisions:
                     logger.info(f"Attempting revision {i+1}...")
                     problem_string = "\n".join(f"- {p}" for p in final_problems)
@@ -387,7 +400,9 @@ class CritiqueSummarizer:
             except requests.RequestException:
                 logger.error("Aborting critique cycle due to unrecoverable API error.")
                 return current_summary, final_problems, last_factual_assessment
+
         return current_summary, final_problems, last_factual_assessment
+    
     def _extract_bullet_points(self, summary):
         # ... (Implementation unchanged)
         if not summary: return []
