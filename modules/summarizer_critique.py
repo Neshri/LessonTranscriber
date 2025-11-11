@@ -74,7 +74,7 @@ PROBLEM SOM HITTADES:
 
 REVIDERAD SAMMANFATTNING:"""
 
-PROMPT_BETYGSÄTT_SPRÅK = """
+PROMPT_RATE_LANGUAGE = """
 Du är en expert på svenska språket. Betygsätt följande sammanfattning på en skala från 1 till 5 baserat på dess språkliga kvalitet.
 KRITERIER:
 - Grammatisk korrekthet, Tydlighet och koncishet, Naturligt språkflöde
@@ -187,7 +187,6 @@ class CritiqueSummarizer:
         raise Exception("Ollama request failed after all retries.")
 
     def _verify_points_against_chunk(self, points_to_check, text_chunk):
-        # ... (Implementation unchanged)
         if not points_to_check:
             return []
         points_json_list = json.dumps(points_to_check, ensure_ascii=False, indent=2)
@@ -196,6 +195,12 @@ class CritiqueSummarizer:
         try:
             result = self._call_ollama(prompt, num_ctx=self.num_ctx["verify"], temperature=self.llm_params["verify_temp"], timeout=self.timeouts["verify"])
             response_text = result.get('response', '{}').strip()
+
+            # --- [NEW LOGGING 4] ---
+            # Log the raw response from the API before any parsing. This is the most critical log.
+            logger.debug(f"RAW OLLAMA VERIFICATION RESPONSE (UTF-8 bytes): {response_text.encode('utf-8', 'replace')}")
+            # -------------------------
+
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
                 if response_text.endswith("```"):
@@ -220,19 +225,25 @@ class CritiqueSummarizer:
 
     def _recursive_factual_assessment(self, summary, transcript):
         """
-        [FINAL CORRECTED VERSION] Includes a fix for the oversized point bug in sub-batching.
+        [MODIFIED WITH DEBUG LOGGING]
+        Includes logging to track the state of strings through the verification process.
         """
         logger.info("Starting recursive factual correctness assessment (batch citation mode)...")
         all_bullet_points = self._extract_bullet_points(summary)
         if not all_bullet_points:
             return {"score": 1.0, "verified_points": [], "failed_points": []}
+        
+        # --- [NEW LOGGING 1] ---
+        # Log the initial state of each bullet point to check for the problematic character.
+        for point in all_bullet_points:
+            logger.debug(f"RAW BULLET POINT (UTF-8 bytes): {point.encode('utf-8', 'replace')}")
+        # -------------------------
 
         transcript_chunks = self._chunk_transcript(transcript)
         logger.info(f"Divided transcript into {len(transcript_chunks)} overlapping chunks.")
         
         globally_verified_points = set()
         
-        # Estimate token count for a chunk once.
         chunk_token_estimate = self._estimate_token_count(transcript_chunks[0]) if transcript_chunks else 0
         max_tokens_for_points = self.num_ctx["verify"] - chunk_token_estimate - self.prompt_template_buffer
 
@@ -250,29 +261,29 @@ class CritiqueSummarizer:
             
             current_sub_batch = []
             for point in points_to_check:
-                # [CORRECTED LOGIC] First, check if the point itself is too big to ever be processed.
                 point_token_estimate = self._estimate_token_count(json.dumps([point]))
                 if point_token_estimate > max_tokens_for_points:
                     logger.warning(f"A single bullet point is too long to fit in the context window and cannot be verified. Point: '{point}'")
-                    continue # Skip this point entirely; it will remain in the failed set.
+                    continue
 
-                # Second, check if adding this point would make the current batch too big.
                 potential_batch = current_sub_batch + [point]
                 batch_json = json.dumps(potential_batch, ensure_ascii=False)
                 if self._estimate_token_count(batch_json) > max_tokens_for_points:
-                    # If the potential batch is too big, send the *current* batch (which we know fits).
+                    # --- [NEW LOGGING 2] ---
+                    logger.debug(f"JSON BATCH SENT TO OLLAMA (UTF-8 bytes): {json.dumps(current_sub_batch, ensure_ascii=False).encode('utf-8', 'replace')}")
+                    # -------------------------
                     verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
                     if verifications_in_sub_batch:
                         newly_verified = {item['point'] for item in verifications_in_sub_batch}
                         globally_verified_points.update(newly_verified)
-                    # The new batch starts with the current point.
                     current_sub_batch = [point]
                 else:
-                    # The point fits, so add it to the batch for the next iteration.
                     current_sub_batch = potential_batch
 
-            # After the loop, send any remaining points in the final sub-batch.
             if current_sub_batch:
+                # --- [NEW LOGGING 3] ---
+                logger.debug(f"FINAL JSON BATCH SENT TO OLLAMA (UTF-8 bytes): {json.dumps(current_sub_batch, ensure_ascii=False).encode('utf-8', 'replace')}")
+                # -------------------------
                 verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
                 if verifications_in_sub_batch:
                     newly_verified = {item['point'] for item in verifications_in_sub_batch}
@@ -455,7 +466,7 @@ class CritiqueSummarizer:
         # ... (Implementation unchanged)
         response_text = ""
         try:
-            result = self._call_ollama(prompt=PROMPT_BETYGSÄTT_SPRÅK.format(summary=summary), num_ctx=self.num_ctx["quality_score"], temperature=self.llm_params["quality_score_temp"], timeout=self.timeouts["quality_score"])
+            result = self._call_ollama(prompt=PROMPT_RATE_LANGUAGE.format(summary=summary), num_ctx=self.num_ctx["quality_score"], temperature=self.llm_params["quality_score_temp"], timeout=self.timeouts["quality_score"])
             response_text = result.get('response', '{}').strip()
             response_json = json.loads(response_text)
             score = response_json.get("score", 3)
