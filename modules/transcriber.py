@@ -206,7 +206,12 @@ class Transcriber:
                     no_speech_prob = result.get('no_speech_prob', 0.0)  # Default to 0.0 if not available
                 elif hasattr(self, 'use_faster_whisper') and self.use_faster_whisper:
                     # Using faster-whisper
-                    segments, info = self.whisper_model.transcribe(audio_path, beam_size=5)
+                    segments, info = self.whisper_model.transcribe(
+                    audio_path,
+                    beam_size=10,
+                    language='sv',
+                    vad_filter=True
+                    )
                     logger.info(f"Detected language '{info.language}' with probability {info.language_probability:.2f}")
 
                     # Convert segments generator to list for processing
