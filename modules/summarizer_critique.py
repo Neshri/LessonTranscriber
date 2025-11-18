@@ -198,7 +198,7 @@ class CritiqueSummarizer:
 
             # --- [NEW LOGGING 4 - Corrected to INFO] ---
             # Log the raw response from the API before any parsing. This is the most critical log.
-            logger.info(f"ASSESSMENT - RAW OLLAMA RESPONSE (UTF-8 bytes): {response_text.encode('utf-8', 'replace')}")
+            logger.info(f"ASSESSMENT - RAW OLLAMA RESPONSE: {response_text}")
             # --------------------------------------------
 
             if response_text.startswith("```json"):
@@ -237,7 +237,7 @@ class CritiqueSummarizer:
         # --- [NEW LOGGING 1 - Corrected to INFO] ---
         # Log the initial state of each bullet point to check for the problematic character.
         for point in all_bullet_points:
-            logger.info(f"ASSESSMENT - RAW BULLET POINT (UTF-8 bytes): {point.encode('utf-8', 'replace')}")
+            logger.info(f"ASSESSMENT - RAW BULLET POINT: {point}")
         # --------------------------------------------
 
         transcript_chunks = self._chunk_transcript(transcript)
@@ -271,7 +271,7 @@ class CritiqueSummarizer:
                 batch_json = json.dumps(potential_batch, ensure_ascii=False)
                 if self._estimate_token_count(batch_json) > max_tokens_for_points:
                     # --- [NEW LOGGING 2 - Corrected to INFO] ---
-                    logger.info(f"ASSESSMENT - JSON BATCH SENT (UTF-8 bytes): {json.dumps(current_sub_batch, ensure_ascii=False).encode('utf-8', 'replace')}")
+                    logger.info(f"ASSESSMENT - JSON BATCH SENT: {json.dumps(current_sub_batch, ensure_ascii=False)}")
                     # --------------------------------------------
                     verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
                     if verifications_in_sub_batch:
@@ -283,7 +283,7 @@ class CritiqueSummarizer:
 
             if current_sub_batch:
                 # --- [NEW LOGGING 3 - Corrected to INFO] ---
-                logger.info(f"ASSESSMENT - FINAL JSON BATCH SENT (UTF-8 bytes): {json.dumps(current_sub_batch, ensure_ascii=False).encode('utf-8', 'replace')}")
+                logger.info(f"ASSESSMENT - FINAL JSON BATCH SENT: {json.dumps(current_sub_batch, ensure_ascii=False)}")
                 # --------------------------------------------
                 verifications_in_sub_batch = self._verify_points_against_chunk(current_sub_batch, chunk)
                 if verifications_in_sub_batch:
@@ -348,7 +348,7 @@ class CritiqueSummarizer:
         # --- [FINAL DIAGNOSTIC LOG] ---
         # This log will show the state of the summary string the moment it is
         # passed into this class from your main script.
-        logger.info(f"PERFORM_CRITIQUE - Received summary (UTF-8 bytes): {summary.encode('utf-8', 'replace')}")
+        logger.info(f"PERFORM_CRITIQUE - Received summary: {summary}")
         # --------------------------------
 
         logger.info("--- Starting new 3-phase critique and revision cycle ---")
