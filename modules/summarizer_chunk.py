@@ -172,7 +172,7 @@ def summarize_chunk(config, ollama_manager, transcript_chunk, is_chunk=False):
                     # Check if Ollama service is responsive before restarting
                     if not ollama_manager.check_ollama_health():
                         logger.info("Ollama service health check failed. Restarting service...")
-                        ollama_manager.restart_ollama_service()()
+                        ollama_manager.restart_ollama_service()
                         time.sleep(60)  # Longer wait after restart
                     else:
                         logger.info("Ollama service is responsive despite timeout. Waiting before retry...")
