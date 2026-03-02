@@ -42,6 +42,7 @@ class Transcriber:
         self.whisper_model = None
         self.use_standard_whisper = False
         self.use_faster_whisper = False
+        self.initial_prompt = config.get('initial_prompt', None)
 
         self._load_model()
 
@@ -210,7 +211,8 @@ class Transcriber:
                     audio_path,
                     beam_size=10,
                     language='sv',
-                    vad_filter=True
+                    vad_filter=True,
+                    initial_prompt=self.initial_prompt
                     )
                     logger.info(f"Detected language '{info.language}' with probability {info.language_probability:.2f}")
 
