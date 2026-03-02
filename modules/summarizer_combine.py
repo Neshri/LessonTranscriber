@@ -156,20 +156,20 @@ def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
                     # Check if Ollama service is responsive before restarting
                     if not ollama_manager.check_ollama_health():
                         logger.info("Combined summary: Ollama service health check failed. Restarting service...")
-                        ollama_manager.restart_ollama_service()()
+                        ollama_manager.restart_ollama_service()
                         time.sleep(60)
                     else:
                         logger.info("Combined summary: Ollama service is responsive despite timeout. Waiting before retry...")
                         time.sleep(30)
                 elif isinstance(e, requests.exceptions.ConnectionError):
                     logger.info("Connection failed for combined summary. Restarting Ollama service...")
-                    ollama_manager.restart_ollama_service()()
+                    ollama_manager.restart_ollama_service()
                     time.sleep(30)
                 elif "streaming timeout" in str(e).lower():
                     logger.error(f"Streaming timeout exceeded for combined summarization")
                     if attempt < max_retries - 1:
                         logger.info("Combined streaming timeout indicates service hang. Restarting Ollama service...")
-                        ollama_manager.restart_ollama_service()()
+                        ollama_manager.restart_ollama_service()
                         time.sleep(60)
                     else:
                         logger.error(f"All {max_retries} combined summary attempts failed due to streaming timeouts")
