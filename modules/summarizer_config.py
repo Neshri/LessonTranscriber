@@ -22,7 +22,7 @@ class SummarizerConfig:
         self.chunk_model = self.ollama_model
         self.max_summary_length = config.get('max_summary_length', 1000)
         self.summarization_prompt_template = config['summarization_prompt_template']
-        self.chunk_summarization_prompt_template = config.get('chunk_summarization_prompt_template', 'Följande är ett utdrag från en längre lektionstranskription. Sammanfatta de viktigaste punkterna på MAX 200 ord. Var mycket koncist och använd enkel prosa utan rubriker eller specialformatering. Transkription:\n{transcript}')
+        self.chunk_summarization_prompt_template = config.get('chunk_summarization_prompt_template', 'Följande är ett utdrag från en längre lektionstranskription. Sammanfatta de viktigaste punkterna på MAX 200 ord. Svara på svenska, men BEHÅLL alla tekniska termer, programnamn och citat på engelska (t.ex. "Active Directory", "Domain Controller", "Root"). Var mycket koncist och använd enkel prosa utan rubriker eller specialformatering. Transkription:\n{transcript}')
         self.combine_summaries_prompt_template = config.get('combine_summaries_prompt_template', self._get_default_combine_prompt())
         self.translation_cleanup_prompt_template = config.get('translation_cleanup_prompt_template', 'Du är en svenskspråkig AI-assistent vars enda funktion är att säkerställa att sammanfattningen är på korrekt svenska utan att förvränga tekniska termer.\n\nAnalysera JSON-objektet nedan. Om texten redan är på svenska, lämna den oförändrad. Om den är på engelska, översätt endast naturligt språk till svenska men BEHÅLL alla tekniska termer, kommandon, kod, och engelska namn exakt som de är.\n\nRör INTE JSON-strukturen eller nycklarna. Returnera endast det färdiga JSON-objektet.\n\n**JSON-OBJEKT:**\n{summary_json}')
         self.max_context_tokens = config.get('max_context_tokens', 3200)
@@ -36,7 +36,10 @@ class SummarizerConfig:
 
     def _get_default_combine_prompt(self):
         """Get default combine summaries prompt if not in config, ensuring it uses JSON format."""
-        return """Du är en expertredaktör. Syntetisera textdelarna nedan. Ditt svar måste vara ett giltigt JSON-objekt.
+        return """Du är en expertredaktör. Syntetisera textdelarna nedan till en enhetlig sammanfattning. 
+Ditt svar måste vara på svenska, men du får ABSOLUT INTE översätta tekniska termer, programnamn eller branschstandarder (t.ex. "Active Directory", "DHCP", "Root", "Domain Controller"). Behåll dem på engelska inom den svenska texten.
+
+Ditt svar måste vara ett giltigt JSON-objekt.
 
 **TEXTDELAR ATT SYNTETISERA:**
 {chunk_summaries}
@@ -44,8 +47,8 @@ class SummarizerConfig:
 **OBLIGATORISKT SVARSFORMAT (ENDAST JSON):**
 Ditt svar måste vara ett JSON-objekt med nycklarna "subject" och "summary".
 ```json
-{
+{{
   "subject": "En kombinerad ämnesrad här",
   "summary": "Den färdiga, sammanhängande sammanfattningen börjar här..."
-}
+}}
 ```"""

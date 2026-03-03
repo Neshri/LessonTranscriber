@@ -142,7 +142,10 @@ def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
 
 def _get_default_combine_prompt():
     """Get default combine summaries prompt if not in config, ensuring it uses JSON format."""
-    return """Du är en expertredaktör. Syntetisera textdelarna nedan. Ditt svar måste vara ett giltigt JSON-objekt.
+    return """Du är en expertredaktör. Syntetisera textdelarna nedan till en enhetlig sammanfattning. 
+Ditt svar måste vara på svenska, men du får ABSOLUT INTE översätta tekniska termer, programnamn eller branschstandarder (t.ex. "Active Directory", "DHCP", "Root", "Domain Controller"). Behåll dem på engelska inom den svenska texten.
+
+Ditt svar måste vara ett giltigt JSON-objekt.
 
 **TEXTDELAR ATT SYNTETISERA:**
 {chunk_summaries}

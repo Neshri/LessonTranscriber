@@ -12,6 +12,9 @@ import time
 import re
 import random
 
+from .summarizer_streaming import stream_ollama_response, StreamingTimeoutError
+from .summarizer_text import estimate_token_count
+
 logger = logging.getLogger(__name__)
 
 # --- PROMPTS ---
@@ -62,8 +65,9 @@ PROMPT_REVISE_SUMMARY = """Din uppgift är att agera som en redaktör och revide
 Behåll all korrekt teknisk information men förbättra sammanfattningen enligt den givna feedbacken.
 
 **VIKTIGA REGLER FÖR DITT SVAR:**
+-   Svara på svenska, men du får **ABSOLUT INTE** översätta tekniska termer, programnamn eller branschstandarder (t.ex. "Active Directory", "DHCP", "Root", "Domain Controller"). Behåll dem på engelska inom den svenska texten.
 -   Svara **ENDAST** med den reviderade sammanfattningens text.
--   Inkludera **INGA** extra rubriker, kommentarer, markdown eller förklaringar som "Här är den reviderade sammanfattningen:".
+-   Inkludera **INGA** extra rubriker, kommentarer, markdown eller förklaringar.
 -   Formatet på ditt svar måste vara en ren lista med punkter som börjar med '-'.
 
 ORIGINAL SAMMANFATTNING:
@@ -72,7 +76,7 @@ ORIGINAL SAMMANFATTNING:
 PROBLEM SOM HITTADES:
 {problems}
 
-REVIDERAD SAMMANFATTNING:"""
+REVIDERAD SAMMANFATTNING (PÅ SVENSKA, BEHÅLL TEKNISKA TERMER):"""
 
 PROMPT_RATE_LANGUAGE = """
 Du är en expert på svenska språket. Betygsätt följande sammanfattning på en skala från 1 till 5 baserat på dess språkliga kvalitet.
@@ -142,10 +146,10 @@ class CritiqueSummarizer:
         self.initial_backoff = config.get('initial_backoff_seconds', 5)
 
         self.timeouts = {
-            "verify": config.get("timeout_verify", 120),
-            "revise": config.get("timeout_revise", 120),
-            "quality_assess": config.get("timeout_quality_assess", 90),
-            "quality_score": config.get("timeout_quality_score", 30)
+            "verify": config.get("timeout_verify", 300),  # Increased for complex batches
+            "revise": config.get("timeout_revise", 180),
+            "quality_assess": config.get("timeout_quality_assess", 120),
+            "quality_score": config.get("timeout_quality_score", 60)
         }
         self.llm_params = {
             "verify_temp": config.get("temp_verify", 0.0),
@@ -162,20 +166,34 @@ class CritiqueSummarizer:
         # [NEW] A buffer to leave room for the rest of the prompt template
         self.prompt_template_buffer = 400 
 
-    def _call_ollama(self, prompt, num_ctx, temperature, top_p=0.8, timeout=90):
-        # ... (Implementation unchanged)
+    def _call_ollama(self, prompt, num_ctx, temperature, top_p=0.8, timeout=120):
         request_payload = {
-            "model": self.ollama_model, "prompt": prompt, "stream": False,
+            "model": self.ollama_model, 
+            "prompt": prompt, 
+            "stream": True,  # Always use streaming for watchdog support
             "options": {"num_ctx": num_ctx, "temperature": temperature, "top_p": top_p}
         }
         backoff_time = self.initial_backoff
         for attempt in range(self.max_retries):
             try:
                 logger.debug(f"Attempt {attempt + 1}/{self.max_retries} to send request to Ollama...")
-                response = requests.post(f"{self.ollama_url}/api/generate", json=request_payload, timeout=timeout)
+                response = requests.post(
+                    f"{self.ollama_url}/api/generate", 
+                    json=request_payload, 
+                    timeout=30,  # Fast connect timeout
+                    stream=True
+                )
                 response.raise_for_status()
-                return response.json()
-            except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+                
+                # Use shared streaming handler with stall timeout derived from total timeout
+                raw_response = stream_ollama_response(
+                    response,
+                    stall_timeout=timeout,
+                    log_interval=30
+                )
+                return {"response": raw_response}
+
+            except (requests.exceptions.RequestException, StreamingTimeoutError) as e:
                 logger.warning(f"Ollama request failed on attempt {attempt + 1}: {e}")
                 if attempt + 1 == self.max_retries:
                     logger.error("Maximum retries reached. Aborting Ollama request.")
@@ -186,42 +204,74 @@ class CritiqueSummarizer:
                 backoff_time *= 2
         raise Exception("Ollama request failed after all retries.")
 
+    def _extract_json(self, text):
+        """Robustly extract JSON from text even if it contains conversational padding or backticks."""
+        # Clean potential markdown
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        
+        # Look for JSON structure using regex if it's not a direct match
+        try:
+            # Find the first { or [ and the last } or ]
+            match = re.search(r'([\{\[].*[\}\]])', text, re.DOTALL)
+            if match:
+                text = match.group(1)
+            return json.loads(text)
+        except (json.JSONDecodeError, AttributeError):
+            logger.error(f"Failed to extract JSON from: {text[:200]}...")
+            return None
+
     def _verify_points_against_chunk(self, points_to_check, text_chunk):
         if not points_to_check:
             return []
         points_json_list = json.dumps(points_to_check, ensure_ascii=False, indent=2)
         prompt = PROMPT_BATCH_VERIFY_AND_CITE.format(text_chunk=text_chunk, points_json_list=points_json_list)
-        response_text = ""
         try:
             result = self._call_ollama(prompt, num_ctx=self.num_ctx["verify"], temperature=self.llm_params["verify_temp"], timeout=self.timeouts["verify"])
             response_text = result.get('response', '{}').strip()
-
-            # --- [NEW LOGGING 4 - Corrected to INFO] ---
-            # Log the raw response from the API before any parsing. This is the most critical log.
+            
             logger.info(f"ASSESSMENT - RAW OLLAMA RESPONSE: {response_text}")
-            # --------------------------------------------
 
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-                if response_text.endswith("```"):
-                    response_text = response_text[:-3]
-            response_json = json.loads(response_text)
-            verifications = response_json.get("verifications", [])
-            if not isinstance(verifications, list):
-                logger.warning(f"LLM returned a non-list for verifications: {verifications}")
+            response_json = self._extract_json(response_text)
+            if response_json is None:
                 return []
-            valid_verifications = [item for item in verifications if isinstance(item, dict) and 'point' in item and 'quote' in item]
+            
+            # Adaptive parsing: handle raw lists or wrapped objects
+            if isinstance(response_json, list):
+                verifications = response_json
+            elif isinstance(response_json, dict):
+                verifications = response_json.get("verifications", [])
+            else:
+                logger.warning(f"Unexpected JSON type from LLM: {type(response_json)}")
+                return []
+
+            if not isinstance(verifications, list):
+                logger.warning(f"LLM verifications is not a list: {verifications}")
+                return []
+
+            valid_verifications = [
+                item for item in verifications 
+                if isinstance(item, dict) and ('point' in item or 'verified_point' in item) and 'quote' in item
+            ]
+            # Normalize keys to 'point' and 'quote'
+            for item in valid_verifications:
+                if 'verified_point' in item and 'point' not in item:
+                    item['point'] = item['verified_point']
+            
             return valid_verifications
-        except requests.RequestException:
-            logger.error("Batch verification failed after all retries.")
-            return []
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON from batch verification response. Full response text: '{response_text}'", exc_info=True)
+        except Exception as e:
+            logger.error(f"Batch verification failed: {e}")
             return []
     
     def _estimate_token_count(self, text):
-        """A simple heuristic to estimate token count. 1 token ~= 4 chars."""
-        return len(text) // 4
+        """Unified token estimation using tiktoken."""
+        return estimate_token_count(text)
 
     def _recursive_factual_assessment(self, summary, transcript):
         """
