@@ -273,5 +273,5 @@ class Transcriber:
             self.pipe = None
         if torch and torch.cuda.is_available():
             torch.cuda.empty_cache()
-            time.sleep(15)
+            time.sleep(2)  # Brief pause for GPU memory to be released
             logger.info("Transcription model unloaded and GPU cache cleared")

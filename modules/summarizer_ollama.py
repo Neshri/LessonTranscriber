@@ -18,6 +18,7 @@ except ImportError:
     torch = None
 
 
+
 class OllamaServiceManager:
     """
     Handles Ollama service management including health checks, restarts, and model unloading
@@ -116,7 +117,7 @@ class OllamaServiceManager:
             logger.error(f"Error during Ollama service restart: {e}")
 
     def _unload_ollama_model(self, model=None):
-        """Unload the Ollama model to reset computational state"""
+        """Unload the Ollama model to free GPU memory via the Ollama API"""
         model_to_unload = model or self.ollama_model
         try:
             unload_payload = {
@@ -131,11 +132,8 @@ class OllamaServiceManager:
                 timeout=30
             )
             if response.status_code == 200:
-                if torch and torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                time.sleep(15)  # Increased delay
-                logger.info(f"Successfully unloaded Ollama model and emptied GPU cache: {model_to_unload}")
+                time.sleep(2)  # Brief pause for Ollama to release GPU memory
+                logger.info(f"Successfully unloaded Ollama model: {model_to_unload}")
             else:
                 logger.warning(f"Failed to unload model {model_to_unload}: {response.status_code} - {response.text}")
         except Exception as e:

@@ -3,12 +3,28 @@
 Text processing utilities for summarization
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    import tiktoken
+    _encoding = tiktoken.get_encoding("cl100k_base")
+    TIKTOKEN_AVAILABLE = True
+except ImportError:
+    _encoding = None
+    TIKTOKEN_AVAILABLE = False
+    logger.warning("tiktoken not installed, falling back to heuristic token estimation (pip install tiktoken)")
+
+
 def estimate_token_count(text):
-    """Better estimate token count using word-based estimation"""
-    # Split by whitespace and count words as proxy for tokens
-    words = text.split()
-    # Use word count as rough token estimate (more accurate for speech transcripts)
-    return len(words)
+    """Estimate token count using tiktoken cl100k_base encoding.
+    Falls back to word_count * 1.5 if tiktoken is not available."""
+    if TIKTOKEN_AVAILABLE and _encoding is not None:
+        return len(_encoding.encode(text))
+    else:
+        # Fallback: Swedish text averages ~1.5 tokens per word
+        return int(len(text.split()) * 1.5)
 
 def estimate_text_size_mb(text):
     """Estimate text size in MB"""

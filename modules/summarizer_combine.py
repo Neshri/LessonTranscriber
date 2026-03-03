@@ -6,17 +6,13 @@ Extracted _combine_chunk_summaries logic for modular chunk summary combination
 
 import logging
 import requests
-import json
 import time
 
 logger = logging.getLogger(__name__)
 
-try:
-    import torch
-except ImportError:
-    torch = None
-
 from .summarizer_ollama import OllamaServiceManager
+from .summarizer_streaming import stream_ollama_response, StreamingTimeoutError
+from .summarizer_text import estimate_token_count
 
 
 def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
@@ -37,24 +33,18 @@ def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
     )
 
     logger.info(f"Combined summary prompt (first 500 chars): {combined_summary_prompt[:500]}...")
-    logger.info(f"Full combined prompt length: {len(combined_summary_prompt)} characters")
 
-    # Simple connection test to ensure Ollama is reachable
-    try:
-        test_response = requests.get(f"{config['ollama_url']}/api/tags", timeout=5)
-        if test_response.status_code == 200:
-            logger.info("Ollama service connection test passed for combined summary")
-        else:
-            logger.warning(f"Ollama connection test returned status {test_response.status_code} for combined summary")
-    except Exception as e:
-        logger.warning(f"Ollama connection test failed for combined summary: {e}")
+    # Calculate context limit based on actual token count of the full prompt
+    prompt_tokens = estimate_token_count(combined_summary_prompt)
+    response_headroom = 500
+    context_limit = min(config['max_context_tokens'], prompt_tokens + response_headroom)
+    logger.info(f"Combined prompt is ~{prompt_tokens} tokens, using context_limit={context_limit}")
 
-    # Ensure GPU memory is cleared before combined Ollama request
-    if torch and torch.cuda.is_available():
-        logger.info("Clearing GPU cache before combined Ollama request")
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        time.sleep(15)
+    if prompt_tokens > config['max_context_tokens'] - response_headroom:
+        logger.warning(
+            f"Combined prompt ({prompt_tokens} tokens) is close to or exceeds max_context_tokens "
+            f"({config['max_context_tokens']}). Response quality may be degraded."
+        )
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -64,7 +54,7 @@ def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
                 "prompt": combined_summary_prompt,
                 "stream": True,
                 "options": {
-                    "num_ctx": config['max_context_tokens'],
+                    "num_ctx": context_limit,
                     "temperature": 0.05,  # Even more deterministic for combining
                     "top_p": 0.8,
                     "repeat_penalty": 1.2
@@ -72,17 +62,11 @@ def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
             }
 
             logger.info(f"Sending combined summary request to Ollama with model: {config['ollama_model']}")
-            logger.info(f"Full prompt to Ollama: {repr(combined_summary_prompt)}")
-
-            # Log GPU memory usage before combined Ollama request
-            if torch and torch.cuda.is_available():
-                gpu_memory_before = torch.cuda.memory_allocated() / 1024**3  # GB
-                logger.info(f"GPU memory before combined Ollama request: {gpu_memory_before:.2f} GB")
 
             request_start_time = time.time()
             logger.info(f"Combined Ollama request started at: {time.strftime('%H:%M:%S', time.localtime(request_start_time))}")
 
-            # Use progressive timeout strategy for combined summaries too (longer for final summary)
+            # Use progressive timeout strategy for combined summaries (longer for final summary)
             progressive_timeout = 180 + (attempt * 180)  # 3min, 6min, 9min
             logger.info(f"Combined attempt {attempt + 1} with timeout: {progressive_timeout}s")
 
@@ -96,50 +80,19 @@ def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
             logger.info(f"Combined summary API call started with status: {response.status_code}")
 
             if response.status_code == 200:
-                # Handle streaming response using iter_content() and manual newline splitting
-                raw_response = ""
-                buffer = b""
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        buffer += chunk
-                        # Split by newlines
-                        lines = buffer.split(b'\n')
-                        # Process complete lines
-                        for line in lines[:-1]:
-                            if line.strip():
-                                try:
-                                    line_str = line.decode('utf-8')
-                                    chunk_data = json.loads(line_str)
-                                    if 'response' in chunk_data:
-                                        raw_response += chunk_data['response']
-                                    if chunk_data.get('done', False):
-                                        break
-                                except (json.JSONDecodeError, UnicodeDecodeError):
-                                    continue
-                        buffer = lines[-1]  # Keep incomplete line
+                # Use shared streaming handler with stall timeout
+                raw_response = stream_ollama_response(
+                    response,
+                    stall_timeout=90,
+                    log_interval=30
+                )
 
-                # Process any remaining buffer after loop
-                if buffer.strip():
-                    try:
-                        line_str = buffer.decode('utf-8')
-                        chunk_data = json.loads(line_str)
-                        if 'response' in chunk_data:
-                            raw_response += chunk_data['response']
-                    except (json.JSONDecodeError, UnicodeDecodeError):
-                        pass
-
-                raw_response = raw_response.replace("</end_of_turn>", "")
                 logger.info(f"Raw combined summary response (first 500 chars): {raw_response[:500]}...")
                 logger.info(f"Full combined response length: {len(raw_response)} characters")
 
                 request_end_time = time.time()
                 request_duration = request_end_time - request_start_time
                 logger.info(f"Combined Ollama request completed in: {request_duration:.2f} seconds")
-
-                # Log GPU memory usage after combined Ollama request
-                if torch and torch.cuda.is_available():
-                    gpu_memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
-                    logger.info(f"GPU memory after combined Ollama request: {gpu_memory_after:.2f} GB")
 
                 final_summary = raw_response.strip()
                 logger.info(f"Final combined summary completed ({len(final_summary)} characters)")
@@ -149,11 +102,24 @@ def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
                 # Fallback: return concatenated individual summaries
                 return "\n\n".join(chunk_summaries)
 
+        except StreamingTimeoutError as e:
+            logger.warning(f"Combined summary streaming stall on attempt {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                if not ollama_manager.check_ollama_health():
+                    logger.info("Combined summary: Ollama service health check failed. Restarting service...")
+                    ollama_manager.restart_ollama_service()
+                    time.sleep(60)
+                else:
+                    logger.info("Combined summary: Ollama responsive despite stall. Waiting before retry...")
+                    time.sleep(30)
+            else:
+                logger.error(f"All {max_retries} combined summary attempts failed due to streaming stalls")
+                return "\n\n".join(chunk_summaries)
+
         except Exception as e:
             logger.warning(f"Combined summary attempt {attempt + 1} failed: {e}")
             if attempt < max_retries - 1:
                 if isinstance(e, requests.exceptions.ReadTimeout):
-                    # Check if Ollama service is responsive before restarting
                     if not ollama_manager.check_ollama_health():
                         logger.info("Combined summary: Ollama service health check failed. Restarting service...")
                         ollama_manager.restart_ollama_service()
@@ -165,16 +131,6 @@ def combine_chunk_summaries(config, ollama_manager, chunk_summaries):
                     logger.info("Connection failed for combined summary. Restarting Ollama service...")
                     ollama_manager.restart_ollama_service()
                     time.sleep(30)
-                elif "streaming timeout" in str(e).lower():
-                    logger.error(f"Streaming timeout exceeded for combined summarization")
-                    if attempt < max_retries - 1:
-                        logger.info("Combined streaming timeout indicates service hang. Restarting Ollama service...")
-                        ollama_manager.restart_ollama_service()
-                        time.sleep(60)
-                    else:
-                        logger.error(f"All {max_retries} combined summary attempts failed due to streaming timeouts")
-                        # Fallback: return concatenated individual summaries
-                        return "\n\n".join(chunk_summaries)
                 else:
                     logger.info("Ollama service may be busy. Waiting 30 seconds before retry...")
                     time.sleep(30)

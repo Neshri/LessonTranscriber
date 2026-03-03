@@ -82,6 +82,11 @@ class LessonTranscriber:
             else:
                 logger.info("Audio volume already optimal, using original file for transcription")
 
+            # Unload Ollama model before Whisper to free GPU memory
+            # (Ollama will automatically reload when summarization starts)
+            logger.info("Unloading Ollama model to free GPU for Whisper transcription")
+            self.summarizer.unload_model()
+
             logger.info("Starting audio transcription")
             transcription_result = self.transcriber.transcribe_audio(audio_to_transcribe)
             transcript = transcription_result['transcript']
