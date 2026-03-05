@@ -7,9 +7,11 @@ Uses graph-based RAG for better contextual summaries.
 import logging
 import os
 import asyncio
+import numpy as np
 from pathlib import Path
 from lightrag import LightRAG, QueryParam
 from lightrag.llm.ollama import ollama_model_complete, ollama_embed
+from lightrag.utils import wrap_embedding_func_with_attrs
 
 logger = logging.getLogger(__name__)
 
@@ -27,56 +29,76 @@ class LightSummarizer:
         # Ensure working directory exists
         Path(self.working_dir).mkdir(parents=True, exist_ok=True)
         
+        # Wrap embedding function as required by LightRAG v1.4.10
+        # This is where we pass the model name and host for embeddings
+        @wrap_embedding_func_with_attrs(
+            embedding_dim=768, 
+            max_token_size=8192, 
+            model_name=self.embedding_model
+        )
+        async def embedding_func(texts: list[str]) -> np.ndarray:
+            return await ollama_embed.func(
+                texts, 
+                embed_model=self.embedding_model,
+                host=self.ollama_url
+            )
+
         # Initialize LightRAG
+        # Note: v1.4.10 does not take embedding_model_name in __init__
         self.rag = LightRAG(
             working_dir=self.working_dir,
             llm_model_func=ollama_model_complete,
-            llm_model_name=self.llm_model,
-            embedding_func=ollama_embed,
-            embedding_model_name=self.embedding_model,
+            llm_model_name=self.llm_model,     # Correct kwarg for LLM model
+            embedding_func=embedding_func,     # Wrapped function handles embedding model/host
             llm_model_kwargs={
                 "host": self.ollama_url, 
                 "options": {"num_ctx": 32768}
-            },
-            embedding_model_kwargs={"host": self.ollama_url}
+            }
         )
         
-        # Default summarization prompt if not provided
+        self._initialized = False
         self.prompt = config.get('summarization_prompt_template', "Sammanfatta följande lektionstranskription...")
 
-    def generate_summary(self, transcript):
-        """
-        Generate a summary by indexing the transcript and then querying it.
-        """
+    async def _ensure_initialized(self):
+        """Lazy async initialization of storage backends (Required for LightRAG)"""
+        if not self._initialized:
+            logger.info("Initializing LightRAG storage backends...")
+            await self.rag.initialize_storages()
+            self._initialized = True
+
+    async def _generate_summary_async(self, transcript):
+        """Async implementation of indexing and querying"""
+        await self._ensure_initialized()
+        
         logger.info(f"Indexing transcript with LightRAG (length: {len(transcript)})")
+        await self.rag.ainsert(transcript)
         
-        # Index the transcript
-        # LightRAG.insert can take a string
-        self.rag.insert(transcript)
-        
-        logger.info("Querying LightRAG for summary")
-        
-        # Query for a global summary
-        # LightRAG query modes: 'global', 'local', 'hybrid', 'naive'
-        # For a full lesson summary, 'global' or 'hybrid' is usually best.
+        logger.info("Querying LightRAG for summary (global mode)")
+        # Use global mode to get a high-level summary of the entire transcript
         query_text = "Skapa en tekniskt korrekt, kortfattad och språkligt flytande sammanfattning av lektionen. " \
                      "Fokusera på huvudämnen och tekniska termer. Svara ENDAST med ett JSON-objekt enligt detta format: " \
                      '{"subject": "Ämnesrad", "summary": "- Punkt 1\\n- Punkt 2"}'
         
-        # LightRAG query is synchronous if not handled carefully, 
-        # but the library usually provides a sync wrapper or we can run it in a loop.
-        # Most examples show it as sync.
-        response = self.rag.query(query_text, param=QueryParam(mode="global"))
-        
-        logger.info("LightRAG query completed")
-        return response
+        summary = await self.rag.aquery(
+            query_text,
+            param=QueryParam(mode="global")
+        )
+        return summary
+
+    def generate_summary(self, transcript):
+        """Sync wrapper for the async summarization process using local event loop"""
+        try:
+            return asyncio.run(self._generate_summary_async(transcript))
+        except Exception as e:
+            logger.error(f"LightRAG summarization failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return f"Summary generation failed: {str(e)}"
 
     def process_summary(self, raw_llm_output, avg_logprob, no_speech_prob, transcript):
         """
-        Process the summary. For now, we reuse the existing Summarizer's logic
-        if we want to maintain the same output format.
+        Process the summary into the expected application format.
         """
-        # We might need to import SummarizerJSON here or instantiate it
         from .summarizer_json import SummarizerJSON
         summarizer_json = SummarizerJSON(self.config)
         
@@ -84,25 +106,20 @@ class LightSummarizer:
         parsed_data = summarizer_json.parse_llm_output(raw_llm_output)
         
         subject = parsed_data.get('subject', 'Lektionssammanfattning (LightRAG)')
-        summary = parsed_data.get('summary', raw_llm_output) # Fallback to raw if JSON fails
+        summary = parsed_data.get('summary', raw_llm_output)
         
         whisper_metrics = {
             'avg_logprob': avg_logprob,
             'no_speech_prob': no_speech_prob
         }
         
-        # For now, skip the complex critique step unless explicitly requested,
-        # as LightRAG is supposed to be more robust.
         return {
             'subject': subject,
             'summary': summary,
-            'confidence': 1.0, # LightRAG doesn't give a direct confidence score easily
+            'confidence': 1.0,
             'whisper_metrics': whisper_metrics
         }
 
     def unload_model(self):
-        """
-        LightRAG doesn't have a direct 'unload' yet, but we can try to trigger 
-        Ollama's unload through the manager if we had it.
-        """
+        """No-op for now"""
         pass
