@@ -25,5 +25,8 @@
   ],
   "default_audio_source": "lesson_audio",
   "critique_confidence_threshold": 0.6,
-  "enable_critique_step": true
+  "enable_critique_step": true,
+  "use_lightrag": true,
+  "lightrag_storage": "./lightrag_storage",
+  "lightrag_embedding_model": "nomic-embed-text"
 }

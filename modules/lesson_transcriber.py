@@ -12,6 +12,7 @@ from pathlib import Path
 from modules.audio_handler import validate_audio_file, check_audio_duration, detect_audio_volume
 from modules.transcriber import Transcriber
 from modules.summarizer import Summarizer
+from modules.summarizer_lightrag import LightSummarizer
 from lecture_detector import LectureDetector
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,14 @@ class LessonTranscriber:
 
         # Initialize components
         self.transcriber = Transcriber(config)
-        self.summarizer = Summarizer(config)
+        
+        self.use_lightrag = config.get('use_lightrag', False)
+        if self.use_lightrag:
+            logger.info("Using LightRAG for summarization")
+            self.summarizer = LightSummarizer(config)
+        else:
+            logger.info("Using standard Summarizer")
+            self.summarizer = Summarizer(config)
 
         # Configuration parameters
         self.min_duration_minutes = config.get('min_duration_minutes', 5)
