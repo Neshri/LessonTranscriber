@@ -51,6 +51,7 @@ class LightSummarizer:
             llm_model_func=ollama_model_complete,
             llm_model_name=self.llm_model,
             embedding_func=embedding_func,
+            enable_llm_cache=False,
             llm_model_kwargs={
                 "host": self.ollama_url, 
                 "options": {"num_ctx": 32768}
