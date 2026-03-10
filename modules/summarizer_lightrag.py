@@ -87,7 +87,8 @@ class LightSummarizer:
             param=QueryParam(
                 mode="hybrid",
                 top_k=20,
-                response_type="Single JSON object"
+                response_type="Single JSON object",
+                enable_rerank=False
             )
         )
         return summary
@@ -95,7 +96,12 @@ class LightSummarizer:
     def generate_summary(self, transcript):
         """Sync wrapper for the async summarization process using local event loop"""
         try:
-            return asyncio.run(self._generate_summary_async(transcript))
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self._generate_summary_async(transcript))
+            finally:
+                loop.close()
         except Exception as e:
             logger.error(f"LightRAG summarization failed: {e}")
             import traceback

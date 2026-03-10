@@ -374,16 +374,79 @@ class EmailSender:
             else:
                 logger.debug("Confidence score marker not found in summary_content")
 
-            # Format body as HTML with confidence score
+            # Format body as HTML with confidence score and modern styling
             body = f"""
             <html>
+            <head>
+                <style>
+                    body {{
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        line-height: 1.6;
+                        color: #2c3e50;
+                        max-width: 800px;
+                        margin: 0 auto;
+                        padding: 20px;
+                        background-color: #f9f9f9;
+                    }}
+                    .container {{
+                        background-color: #ffffff;
+                        padding: 30px;
+                        border-radius: 12px;
+                        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+                        border: 1px solid #eee;
+                    }}
+                    h1, h2, h3 {{
+                        color: #1a5f7a;
+                        margin-top: 0;
+                    }}
+                    .confidence-badge {{
+                        display: inline-block;
+                        padding: 4px 12px;
+                        background-color: #e3f2fd;
+                        color: #1565c0;
+                        border-radius: 20px;
+                        font-size: 0.9em;
+                        font-weight: bold;
+                        margin-bottom: 20px;
+                        border: 1px solid #bbdefb;
+                    }}
+                    hr {{
+                        border: 0;
+                        border-top: 1px solid #eee;
+                        margin: 30px 0;
+                    }}
+                    .footer {{
+                        font-size: 0.85em;
+                        color: #7f8c8d;
+                        text-align: center;
+                        font-style: italic;
+                    }}
+                    ul, ol {{
+                        padding-left: 20px;
+                    }}
+                    li {{
+                        margin-bottom: 10px;
+                    }}
+                    code {{
+                        background-color: #f4f4f4;
+                        padding: 2px 4px;
+                        border-radius: 4px;
+                        font-family: 'Consolas', 'Monaco', monospace;
+                        font-size: 0.9em;
+                    }}
+                </style>
+            </head>
             <body>
-                <div>
-                <p><strong>Konfidenspoäng: {confidence_score}</strong></p>
-                {html_content}
+                <div class="container">
+                    <div class="confidence-badge">Konfidenspoäng: {confidence_score}</div>
+                    <div class="summary-content">
+                        {html_content}
+                    </div>
+                    <hr>
+                    <div class="footer">
+                        Denna sammanfattning genererades automatiskt från lektionens AI-genererade transkription.
+                    </div>
                 </div>
-                <hr>
-                <p><em>Denna sammanfattning genererades automatiskt från lektionens AI-genererade transkription.</em></p>
             </body>
             </html>
             """

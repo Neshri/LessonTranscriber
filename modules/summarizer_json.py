@@ -94,26 +94,36 @@ class SummarizerJSON:
         for i, candidate in enumerate(reversed(json_candidates)):
             candidate = candidate.strip()  # Strip leading/trailing whitespace/newlines
             logger.info(f"Processing JSON candidate {len(json_candidates) - i} (from end): {repr(candidate)}")
-            # Try to repair common JSON formatting issues
+            
+            # FIRST: Try to parse as-is
+            try:
+                data = json.loads(candidate)
+                logger.info("Successfully parsed JSON candidate without repair")
+                if 'subject' in data and 'summary' in data:
+                    return {'subject': data['subject'] or self._generate_default_subject(), 'summary': data['summary'] or 'Sammanfattning saknas.'}
+            except json.JSONDecodeError:
+                logger.debug("Initial JSON parse failed, attempting repair...")
+
+            # SECOND: Try to repair common JSON formatting issues
             repaired_candidate = self._repair_json_candidate(candidate)
             if repaired_candidate != candidate:
                 logger.debug(f"Repaired JSON candidate: {repr(repaired_candidate)}")
 
             try:
                 data = json.loads(repaired_candidate)
-                logger.debug(f"Successfully parsed JSON: {data}")
+                logger.debug(f"Successfully parsed repaired JSON: {data}")
                 # Ensure required keys are present
                 if 'subject' in data and 'summary' in data:
                     subject = data.get('subject', self._generate_default_subject())
                     summary = data.get('summary', 'Sammanfattning saknas.')               
                     if not subject:
                         subject = self._generate_default_subject()
-                    logger.info("Successfully parsed LLM output with required keys")
+                    logger.info("Successfully parsed LLM output after repair")
                     return {'subject': subject, 'summary': summary}
                 else:
                     logger.debug(f"Parsed JSON missing required keys 'subject' and/or 'summary'. Keys present: {list(data.keys())}")
             except json.JSONDecodeError as e:
-                logger.warning(f"JSON parsing failed for candidate: {e}")
+                logger.warning(f"JSON parsing failed for candidate after repair: {e}")
                 continue  # Skip invalid JSON
 
         logger.warning("LLM output does not contain valid JSON with required keys, treating as plain text")
