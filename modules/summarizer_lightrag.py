@@ -29,8 +29,11 @@ class LightSummarizer:
         # Ensure working directory exists
         Path(self.working_dir).mkdir(parents=True, exist_ok=True)
         
+        self.prompt = config.get('summarization_prompt_template', "Sammanfatta följande lektionstranskription...")
+
+    def _create_rag_instance(self):
+        """Create a fresh LightRAG instance with a clean working directory"""
         # Wrap embedding function as required by LightRAG v1.4.10
-        # This is where we pass the model name and host for embeddings
         @wrap_embedding_func_with_attrs(
             embedding_dim=768, 
             max_token_size=8192, 
@@ -43,45 +46,49 @@ class LightSummarizer:
                 host=self.ollama_url
             )
 
-        # Initialize LightRAG
-        # Note: v1.4.10 does not take embedding_model_name in __init__
-        self.rag = LightRAG(
+        return LightRAG(
             working_dir=self.working_dir,
             llm_model_func=ollama_model_complete,
-            llm_model_name=self.llm_model,     # Correct kwarg for LLM model
-            embedding_func=embedding_func,     # Wrapped function handles embedding model/host
+            llm_model_name=self.llm_model,
+            embedding_func=embedding_func,
             llm_model_kwargs={
                 "host": self.ollama_url, 
                 "options": {"num_ctx": 32768}
             }
         )
-        
-        self._initialized = False
-        self.prompt = config.get('summarization_prompt_template', "Sammanfatta följande lektionstranskription...")
-
-    async def _ensure_initialized(self):
-        """Lazy async initialization of storage backends (Required for LightRAG)"""
-        if not self._initialized:
-            logger.info("Initializing LightRAG storage backends...")
-            await self.rag.initialize_storages()
-            self._initialized = True
 
     async def _generate_summary_async(self, transcript):
-        """Async implementation of indexing and querying"""
-        await self._ensure_initialized()
+        """Async implementation of indexing and querying with a fresh RAG instance"""
+        import shutil
+        if Path(self.working_dir).exists():
+            shutil.rmtree(self.working_dir)
+        Path(self.working_dir).mkdir(parents=True, exist_ok=True)
+
+        rag = self._create_rag_instance()
         
+        logger.info("Initializing LightRAG storage backends...")
+        await rag.initialize_storages()
+
         logger.info(f"Indexing transcript with LightRAG (length: {len(transcript)})")
-        await self.rag.ainsert(transcript)
+        await rag.ainsert(transcript)
         
-        logger.info("Querying LightRAG for summary (global mode)")
-        # Use global mode to get a high-level summary of the entire transcript
-        query_text = "Skapa en tekniskt korrekt, kortfattad och språkligt flytande sammanfattning av lektionen. " \
-                     "Fokusera på huvudämnen och tekniska termer. Svara ENDAST med ett JSON-objekt enligt detta format: " \
-                     '{"subject": "Ämnesrad", "summary": "- Punkt 1\\n- Punkt 2"}'
+        logger.info("Querying LightRAG for summary (hybrid mode)")
+        query_text = (
+            "Skapa en tekniskt korrekt, kortfattad och språkligt flytande sammanfattning av lektionen. "
+            "Fokusera på vad som faktiskt förklarades verbalt. "
+            "Ignorera referenser till saker som visades på skärm utan verbal förklaring (t.ex. 'som ni ser här', 'klicka här'). "
+            "Håll dig strikt till vad som sades i transkriptionen – dra inga egna slutsatser. "
+            "Svara ENDAST med ett JSON-objekt enligt detta format: "
+            '{"subject": "Ämnesrad", "summary": "- Punkt 1\\n- Punkt 2"}'
+        )
         
-        summary = await self.rag.aquery(
+        summary = await rag.aquery(
             query_text,
-            param=QueryParam(mode="global")
+            param=QueryParam(
+                mode="hybrid",
+                top_k=20,
+                response_type="Single JSON object"
+            )
         )
         return summary
 
