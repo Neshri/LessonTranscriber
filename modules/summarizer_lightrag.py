@@ -93,15 +93,23 @@ class LightSummarizer:
         )
         return summary
 
-    def generate_summary(self, transcript):
-        """Sync wrapper for the async summarization process using local event loop"""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+    _loop = None
+
+    def _get_loop(self):
+        """Get or create a persistent event loop"""
+        if LightSummarizer._loop is None or LightSummarizer._loop.is_closed():
             try:
-                return loop.run_until_complete(self._generate_summary_async(transcript))
-            finally:
-                loop.close()
+                LightSummarizer._loop = asyncio.get_event_loop()
+            except RuntimeError:
+                LightSummarizer._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(LightSummarizer._loop)
+        return LightSummarizer._loop
+
+    def generate_summary(self, transcript):
+        """Sync wrapper for the async summarization process using a persistent event loop"""
+        try:
+            loop = self._get_loop()
+            return loop.run_until_complete(self._generate_summary_async(transcript))
         except Exception as e:
             logger.error(f"LightRAG summarization failed: {e}")
             import traceback
