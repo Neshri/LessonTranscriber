@@ -61,10 +61,13 @@ Router behöver känna till alla subnät för att kunna dirigera trafik korrekt.
 Det sköts antingen med statisk routing eller dynamiska routingprotokoll som OSPF eller EIGRP.
 """
 
+# The query MUST start with a natural-language question so that LightRAG's
+# keyword extractor (used by local/global/hybrid modes) can find graph nodes.
+# Putting format instructions first causes empty keyword extraction → no context.
 QUERY_JSON = (
-    "Skapa en tekniskt korrekt, kortfattad och språkligt flytande sammanfattning av lektionen. "
-    "Fokusera på vad som faktiskt förklarades verbalt. "
-    "Svara ENDAST med ett JSON-objekt enligt detta format exakt: "
+    "Vad handlade lektionen om? "
+    "Skapa en tekniskt korrekt och kortfattad sammanfattning. "
+    "Svara ENDAST med ett JSON-objekt i exakt detta format: "
     '{"subject": "Ämnesrad", "summary": "- Punkt 1\\n- Punkt 2"}'
 )
 
@@ -184,12 +187,20 @@ async def run_test():
         )
         logger.info(f"Raw JSON response:\n{json_answer}")
 
-        # Try to parse it
+        # Try to parse it; fall back to extracting a JSON block from prose/fences
+        import re
+        json_candidate = json_answer.strip()
+        if not json_candidate.startswith("{"):
+            m = re.search(r"```(?:json)?\s*({.*?})\s*```", json_candidate, re.DOTALL)
+            if not m:
+                m = re.search(r"({.*})", json_candidate, re.DOTALL)
+            json_candidate = m.group(1) if m else json_candidate
+
         try:
-            parsed = json.loads(json_answer)
+            parsed = json.loads(json_candidate)
             logger.info(f"✅  JSON parsed OK!")
             logger.info(f"    subject : {parsed.get('subject')}")
-            logger.info(f"    summary : {parsed.get('summary')[:200]}...")
+            logger.info(f"    summary : {parsed.get('summary', '')[:200]}")
             results["json_query"] = {"ok": True, "parsed": parsed}
         except json.JSONDecodeError as je:
             logger.warning(f"⚠️  JSON parse failed ({je}). Raw output saved.")
