@@ -135,7 +135,7 @@ async def run_test():
         enable_llm_cache=False,
         llm_model_kwargs={
             "host": OLLAMA_URL,
-            "options": {"num_ctx": 32768},
+            "options": {"num_ctx": 8192},
         },
     )
     logger.info(f"LLM model       : {LLM_MODEL}")
