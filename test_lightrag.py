@@ -68,7 +68,9 @@ Det sköts antingen med statisk routing eller dynamiska routingprotokoll som OSP
 # no keyword extraction) and keep the query plain.
 QUERY_JSON = (
     "Vad handlade lektionen om? "
-    "Skapa en tekniskt korrekt och kortfattad sammanfattning på svenska."
+    "Skapa en tekniskt korrekt och kortfattad sammanfattning på svenska. "
+    "Svara ENDAST med ett JSON-objekt i exakt detta format: "
+    '{{"subject": "Ämnesrad", "summary": "- Punkt 1\\n- Punkt 2"}}'
 )
 
 QUERY_PLAIN = "Vad handlade lektionen om? Besvara på svenska."
@@ -201,10 +203,19 @@ async def run_test():
 
         try:
             parsed = json.loads(json_candidate)
-            logger.info(f"✅  JSON parsed OK!")
-            logger.info(f"    subject : {parsed.get('subject')}")
-            logger.info(f"    summary : {parsed.get('summary', '')[:200]}")
-            results["json_query"] = {"ok": True, "parsed": parsed}
+            subject = parsed.get("subject")
+            summary = parsed.get("summary", "")
+            if not subject or not summary:
+                logger.warning(
+                    f"⚠️  JSON parsed but schema is wrong — expected 'subject' and "
+                    f"'summary' keys, got: {list(parsed.keys())}"
+                )
+                results["json_query"] = {"ok": False, "raw": json_answer, "parse_error": "wrong schema"}
+            else:
+                logger.info(f"✅  JSON parsed OK!")
+                logger.info(f"    subject : {subject}")
+                logger.info(f"    summary : {summary[:200]}")
+                results["json_query"] = {"ok": True, "parsed": parsed}
         except json.JSONDecodeError as je:
             logger.warning(f"⚠️  JSON parse failed ({je}). Raw output saved.")
             results["json_query"] = {"ok": False, "raw": json_answer, "parse_error": str(je)}
