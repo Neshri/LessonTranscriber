@@ -30,7 +30,7 @@ from pathlib import Path
 
 # ─── Configuration (mirrors config.json) ────────────────────────────────────
 OLLAMA_URL        = "http://127.0.0.1:11434"
-LLM_MODEL         = "gpt-oss:20b"
+LLM_MODEL         = "qwen3:32b"
 EMBEDDING_MODEL   = "nomic-embed-text"
 EMBEDDING_DIM     = 768          # nomic-embed-text output dimension
 WORKING_DIR       = "./test_lightrag_storage"
