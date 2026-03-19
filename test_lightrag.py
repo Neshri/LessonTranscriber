@@ -119,6 +119,7 @@ async def run_test():
         working_dir=WORKING_DIR,
         llm_model_func=ollama_model_complete,
         llm_model_name=LLM_MODEL,
+        llm_model_max_async=1,  # Prevent 4x parallel slowdown hitting the 360s timeout
         embedding_func=embedding_func,
         enable_llm_cache=False,
         llm_model_kwargs={
