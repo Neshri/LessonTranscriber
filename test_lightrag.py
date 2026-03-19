@@ -43,23 +43,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("test_lightrag")
 
-# ─── Sample transcript (short Swedish IT-lesson excerpt) ─────────────────────
-SAMPLE_TRANSCRIPT = """
-Okej, idag ska vi prata om subnetting och vad det innebär i ett IP-nätverk.
-En IP-adress består av 32 bitar och är uppdelad i en nätverksdel och en hostdel.
-Vi använder en nätmask, till exempel 255.255.255.0, för att särskilja dessa delar.
-Det kallas också för /24 i CIDR-notation, vilket betyder att de 24 första bitarna är nätverket.
-
-Om vi har en /24 kan vi ha 254 användbara hostar, eftersom .0 är nätverksadressen
-och .255 är broadcast-adressen.
-
-VLSM, Variable Length Subnet Masking, låter oss dela upp ett nät i mindre bitar.
-Det är viktigt när man designar nätverk och vill undvika att slösa IP-adresser.
-Till exempel kan ett /24-nät delas upp i flera /26-nät för olika avdelningar.
-
-Router behöver känna till alla subnät för att kunna dirigera trafik korrekt.
-Det sköts antingen med statisk routing eller dynamiska routingprotokoll som OSPF eller EIGRP.
-"""
+# ─── Sample transcript (full Whisper transcript) ─────────────────────────────
+with open(Path(__file__).parent / "test_transcript.txt", "r", encoding="utf-8") as f:
+    SAMPLE_TRANSCRIPT = f.read()
 
 # NOTE: The JSON schema literal { ... } in the query string confuses LightRAG's
 # keyword extractor (hybrid/global/local modes), producing empty keywords → no
