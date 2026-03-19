@@ -124,7 +124,11 @@ async def run_test():
         enable_llm_cache=False,
         llm_model_kwargs={
             "host": OLLAMA_URL,
-            "options": {"num_ctx": 8192},
+            "options": {
+                "num_ctx": 8192,
+                "temperature": 0.1,
+            },
+            "think": False,
         },
     )
     logger.info(f"LLM model       : {LLM_MODEL}")
