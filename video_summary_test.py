@@ -56,8 +56,11 @@ analyzer = OllamaVideoAnalyzer(
 video_path = "windows7kontrollpanel.mp4"
 results = analyzer.analyze_video(video_path)
 
-print("\nBrief Summary:")
-print(results['brief_summary'])
+output_file = "summary_output.txt"
+with open(output_file, "w", encoding="utf-8") as f:
+    f.write("Brief Summary:\n")
+    f.write(results['brief_summary'])
+    f.write("\n\nDetailed Summary:\n")
+    f.write(results['summary'])
 
-print("\nDetailed Summary:")
-print(results['summary'])
+print(f"\nResults have been written to {output_file}")
