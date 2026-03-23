@@ -13,7 +13,7 @@ logging.basicConfig(
 # KB-Whisper large with strict revision for most verbatim transcription
 transcriber = WhisperTranscriber(
     model_name="KBLab/kb-whisper-large",
-    model_kwargs={"revision": "strict"}
+    device="cuda"
 )
 
 custom_prompts = AnalysisPrompts(
