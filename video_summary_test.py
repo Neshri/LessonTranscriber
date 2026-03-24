@@ -45,10 +45,10 @@ custom_prompts = AnalysisPrompts(
 )
 
 analyzer = OllamaVideoAnalyzer(
-    frame_analysis_model="qwen3-vl:30b",
+    frame_analysis_model="qwen3-vl:8b",
     summary_model="qwen3:32b",
     min_frames=5,
-    max_frames=15,
+    max_frames=45,
     frames_per_minute=3.0,
     frame_selector=DynamicFrameSelector(threshold=70.0),
     audio_transcriber=transcriber,
