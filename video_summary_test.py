@@ -18,26 +18,26 @@ transcriber = WhisperTranscriber(
 
 custom_prompts = AnalysisPrompts(
     frame_analysis=(
-        "You are analyzing a screen capture from an IT lesson. "
-        "Describe only what is explicitly visible: open windows, application names, "
-        "terminal output, file/folder structures, dialog boxes, and any text on screen. "
-        "Do not infer or assume anything not directly visible."
+        "Du analyserar en skärmbild från en IT-lektion. "
+        "Beskriv endast vad som är direkt synligt: öppna fönster, programnamn, "
+        "terminalutskrifter, fil- och mappstrukturer, dialogrutor och text på skärmen. "
+        "Dra inga slutsatser eller antaganden om sådant som inte syns direkt."
     ),
     detailed_summary=(
-        "You are summarizing an IT lesson from a screen recording. "
-        "Based strictly on the visual timeline and audio transcript below, "
-        "write a faithful summary of what was taught. "
-        "Do not add information not present in the source material.\n\n"
-        "Video duration: {duration:.1f} seconds\n\n"
-        "Screen timeline:\n{timeline}\n\n"
-        "Audio transcript:\n{transcript}"
+        "Du sammanfattar en IT-lektion från en skärminspelning. "
+        "Baserat strikt på skärmtidslinjen och ljudtranskriptionen nedan, "
+        "skriv en trovärdig sammanfattning på svenska av vad som undervisades. "
+        "Lägg inte till information som inte finns i källmaterialet.\n\n"
+        "Videolängd: {duration:.1f} sekunder\n\n"
+        "Skärmtidslinje:\n{timeline}\n\n"
+        "Ljudtranskription:\n{transcript}"
     ),
     brief_summary=(
-        "Based strictly on this {duration:.1f}-second IT lesson recording, "
-        "provide a concise summary of what was demonstrated and explained. "
-        "Only include what is explicitly present in the timeline and transcript.\n\n"
-        "Screen timeline:\n{timeline}\n\n"
-        "Transcript:\n{transcript}"
+        "Baserat strikt på denna {duration:.1f} sekunder långa IT-lektion, "
+        "skriv en kortfattad sammanfattning på svenska av vad som demonstrerades och förklarades. "
+        "Ta endast med det som finns explicit i tidslinjen och transkriptionen.\n\n"
+        "Skärmtidslinje:\n{timeline}\n\n"
+        "Transkription:\n{transcript}"
     )
 )
 
