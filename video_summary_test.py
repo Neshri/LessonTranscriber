@@ -42,7 +42,7 @@ custom_prompts = AnalysisPrompts(
 )
 
 analyzer = OllamaVideoAnalyzer(
-    frame_analysis_model="qwen3-vl:32b",
+    frame_analysis_model="qwen3-vl:30b",
     summary_model="qwen3:32b",
     min_frames=5,
     max_frames=15,
