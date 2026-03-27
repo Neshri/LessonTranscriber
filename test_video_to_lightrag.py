@@ -75,9 +75,9 @@ async def run_pipeline():
     custom_prompts = AnalysisPrompts(
         frame_analysis=(
             "Du analyserar en skärmbild från en IT-lektion. "
-            "Beskriv detaljerat vad som är direkt synligt: öppna fönster, programnamn, "
-            "terminalutskrifter, fil- och mappstrukturer, dialogrutor knappar och text på skärmen. "
-            "Ange detta i punktform och var mycket specifik."
+            "Beskriv endast vad som är direkt synligt: öppna fönster, programnamn, "
+            "terminalutskrifter, fil- och mappstrukturer, dialogrutor och text på skärmen. "
+            "Dra inga slutsatser eller antaganden om sådant som inte syns direkt."
         )
     )
 
